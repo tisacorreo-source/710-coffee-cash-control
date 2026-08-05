@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "710 Coffee Bar - Cierre de turno",
-  description: "Prototipo para registrar cierres de turno con Google Sheets.",
+  title: "710 Coffee Bar - Caja de turno",
+  description: "Prototipo para registrar cierres y dinero retirado con Google Sheets.",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",

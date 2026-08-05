@@ -1,79 +1,138 @@
 import { createSign, randomUUID } from "node:crypto";
 
+export type CashMode = "local" | "sheets";
+
+export type CashState = {
+  baseCash: number;
+  cashLimit: number;
+  currentBalance: number;
+  lastClosingAt: string | null;
+  lastClosingId: string | null;
+  mode: CashMode;
+  persisted: boolean;
+  standardWithdrawal: number;
+  withdrawalsSinceLastClosing: number;
+};
+
 export type ClosingRecord = {
   recordId: string;
   createdAt: string;
   person: string;
   shift: string;
+  previousCash: number;
   cashSales: number;
   cardSales: number;
   transferSales: number;
   uberSales: number;
-  withdrawnCash: number;
-  withdrawalDescription: string;
   expectedCash: number;
   countedCash: number;
   denominations: Record<string, number>;
   notes: string;
 };
 
-export type AnnulmentRecord = {
-  annulmentId: string;
-  recordId: string;
+export type WithdrawalRecord = {
+  withdrawalId: string;
   createdAt: string;
-  reason: string;
-  deleted: boolean;
-  mode: "local" | "sheets";
+  person: string;
+  shift: string;
+  amount: number;
+  description: string;
 };
 
 type WorkspaceResult = {
   persisted: boolean;
-  mode: "local" | "sheets";
+  mode: CashMode;
   driveFileId?: string;
 };
 
-type DeleteResult = WorkspaceResult & {
-  deleted: boolean;
+type LocalStore = {
+  closings: ClosingRecord[];
+  withdrawals: WithdrawalRecord[];
 };
+
+const BASE_CASH = 1000;
+const CASH_LIMIT = 4000;
+const STANDARD_WITHDRAWAL = 3000;
 
 const CLOSING_HEADERS = [
   "record_id",
   "created_at",
   "responsable",
   "turno",
+  "saldo_anterior",
   "ventas_efectivo",
   "ventas_tarjeta",
   "transferencias_otros",
   "uber_eats",
-  "dinero_retirado",
-  "descripcion_retiro",
   "caja_esperada",
   "caja_contada",
   "observaciones",
   "denominaciones_json",
 ];
 
-const ANNULMENT_HEADERS = [
-  "annulment_id",
-  "record_id",
+const WITHDRAWAL_HEADERS = [
+  "withdrawal_id",
   "created_at",
-  "razon",
-  "registro_borrado",
-  "modo",
+  "responsable",
+  "turno",
+  "monto_retirado",
+  "descripcion",
 ];
 
 let cachedAccessToken: { token: string; expiresAt: number } | null = null;
 
+function localStore() {
+  const globalScope = globalThis as typeof globalThis & {
+    __cashControlLocalStore?: LocalStore;
+  };
+
+  if (!globalScope.__cashControlLocalStore) {
+    globalScope.__cashControlLocalStore = { closings: [], withdrawals: [] };
+  }
+
+  return globalScope.__cashControlLocalStore;
+}
+
 function googleConfig() {
+  const serviceAccount = serviceAccountFromEnv();
+
   return {
-    clientEmail: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || "",
-    privateKey: (process.env.GOOGLE_PRIVATE_KEY || "").replace(/\\n/g, "\n"),
+    clientEmail:
+      process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL ||
+      serviceAccount.clientEmail ||
+      "",
+    privateKey: (
+      process.env.GOOGLE_PRIVATE_KEY ||
+      serviceAccount.privateKey ||
+      ""
+    ).replace(/\\n/g, "\n"),
     spreadsheetId: process.env.GOOGLE_SHEETS_SPREADSHEET_ID || "",
     closingsSheet: process.env.GOOGLE_SHEETS_CLOSINGS_SHEET || "cierres",
-    annulmentsSheet:
-      process.env.GOOGLE_SHEETS_ANNULMENTS_SHEET || "anulaciones",
+    withdrawalsSheet: process.env.GOOGLE_SHEETS_WITHDRAWALS_SHEET || "retiros",
     driveFolderId: process.env.GOOGLE_DRIVE_FOLDER_ID || "",
   };
+}
+
+function serviceAccountFromEnv() {
+  const rawJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+
+  if (!rawJson) {
+    return { clientEmail: "", privateKey: "" };
+  }
+
+  try {
+    const parsed = JSON.parse(rawJson) as {
+      client_email?: string;
+      private_key?: string;
+    };
+
+    return {
+      clientEmail: parsed.client_email || "",
+      privateKey: parsed.private_key || "",
+    };
+  } catch {
+    return { clientEmail: "", privateKey: "" };
+  }
 }
 
 function isWorkspaceConfigured() {
@@ -229,12 +288,25 @@ async function appendRow(sheetName: string, headers: string[], values: unknown[]
   await googleFetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/${encodeURIComponent(
       sheetRange(sheetName, "A1"),
-    )}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
+    )}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
     {
       method: "POST",
       body: JSON.stringify({ values: [values] }),
     },
   );
+}
+
+async function readRows(sheetName: string, headers: string[]) {
+  const config = googleConfig();
+  await ensureHeaderRow(sheetName, headers);
+
+  const response = await googleFetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/${encodeURIComponent(
+      sheetRange(sheetName, "A2:Z"),
+    )}?valueRenderOption=UNFORMATTED_VALUE`,
+  );
+  const data = (await response.json()) as { values?: unknown[][] };
+  return data.values || [];
 }
 
 async function writeDriveAuditFile(kind: string, payload: unknown) {
@@ -277,10 +349,175 @@ async function writeDriveAuditFile(kind: string, payload: unknown) {
   return data.id;
 }
 
+async function tryWriteDriveAuditFile(kind: string, payload: unknown) {
+  try {
+    return await writeDriveAuditFile(kind, payload);
+  } catch (error) {
+    console.warn(
+      `No se pudo guardar auditoria de ${kind} en Drive.`,
+      error instanceof Error ? error.message : error,
+    );
+    return undefined;
+  }
+}
+
+function parseAmount(value: unknown) {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  if (typeof value !== "string") {
+    return 0;
+  }
+
+  const trimmedValue = value.trim();
+  if (!trimmedValue) {
+    return 0;
+  }
+
+  const numericText = trimmedValue.replace(/[^\d,.-]/g, "");
+  const lastComma = numericText.lastIndexOf(",");
+  const lastDot = numericText.lastIndexOf(".");
+  const separatorMatches = numericText.match(/[,.]/g) || [];
+  let decimalSeparator = "";
+
+  if (lastComma >= 0 && lastDot >= 0) {
+    decimalSeparator = lastComma > lastDot ? "," : ".";
+  } else if (separatorMatches.length > 0) {
+    const separator = separatorMatches[0] || "";
+    const lastSeparator = numericText.lastIndexOf(separator);
+    const digitsAfterSeparator = numericText.slice(lastSeparator + 1).length;
+    decimalSeparator = digitsAfterSeparator === 3 ? "" : separator;
+  }
+
+  const normalizedText = decimalSeparator
+    ? numericText
+        .replace(new RegExp(`\\${decimalSeparator === "," ? "." : ","}`, "g"), "")
+        .replace(decimalSeparator, ".")
+    : numericText.replace(/[,.]/g, "");
+
+  const numberValue = Number(normalizedText);
+  return Number.isFinite(numberValue) ? numberValue : 0;
+}
+
+function parseTime(value: unknown) {
+  if (!value) return 0;
+
+  if (typeof value === "number") {
+    const excelEpoch = Date.UTC(1899, 11, 30);
+    const timestamp = excelEpoch + value * 24 * 60 * 60 * 1000;
+    return Number.isFinite(timestamp) ? timestamp : 0;
+  }
+
+  if (typeof value !== "string") {
+    return 0;
+  }
+
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function cashStateFromRecords(
+  closings: ClosingRecord[],
+  withdrawals: WithdrawalRecord[],
+  mode: CashMode,
+): CashState {
+  const sortedClosings = [...closings].sort(
+    (a, b) => parseTime(a.createdAt) - parseTime(b.createdAt),
+  );
+  const lastClosing = sortedClosings.at(-1) || null;
+  const lastClosingTime = parseTime(lastClosing?.createdAt || null);
+  const baseBalance = lastClosing?.countedCash ?? BASE_CASH;
+  const withdrawalsSinceLastClosing = withdrawals
+    .filter((withdrawal) => parseTime(withdrawal.createdAt) > lastClosingTime)
+    .reduce((total, withdrawal) => total + withdrawal.amount, 0);
+
+  return {
+    baseCash: BASE_CASH,
+    cashLimit: CASH_LIMIT,
+    currentBalance: Math.max(baseBalance - withdrawalsSinceLastClosing, 0),
+    lastClosingAt: lastClosing?.createdAt || null,
+    lastClosingId: lastClosing?.recordId || null,
+    mode,
+    persisted: mode === "sheets",
+    standardWithdrawal: STANDARD_WITHDRAWAL,
+    withdrawalsSinceLastClosing,
+  };
+}
+
+function safeText(value: unknown) {
+  return typeof value === "string" ? value : value == null ? "" : String(value);
+}
+
+function safeJson(value: unknown) {
+  if (typeof value !== "string" || !value.trim()) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(value) as Record<string, number>;
+  } catch {
+    return {};
+  }
+}
+
+function closingRecordsFromRows(rows: unknown[][]): ClosingRecord[] {
+  return rows
+    .filter((row) => row[0] && row[1])
+    .map((row) => ({
+      recordId: safeText(row[0]),
+      createdAt: safeText(row[1]),
+      person: safeText(row[2]),
+      shift: safeText(row[3]),
+      previousCash: parseAmount(row[4]),
+      cashSales: parseAmount(row[5]),
+      cardSales: parseAmount(row[6]),
+      transferSales: parseAmount(row[7]),
+      uberSales: parseAmount(row[8]),
+      expectedCash: parseAmount(row[9]),
+      countedCash: parseAmount(row[10]),
+      notes: safeText(row[11]),
+      denominations: safeJson(row[12]),
+    }));
+}
+
+function withdrawalRecordsFromRows(rows: unknown[][]): WithdrawalRecord[] {
+  return rows
+    .filter((row) => row[0] && row[1])
+    .map((row) => ({
+      withdrawalId: safeText(row[0]),
+      createdAt: safeText(row[1]),
+      person: safeText(row[2]),
+      shift: safeText(row[3]),
+      amount: parseAmount(row[4]),
+      description: safeText(row[5]),
+    }));
+}
+
+export async function getCashState(): Promise<CashState> {
+  if (!isWorkspaceConfigured()) {
+    const store = localStore();
+    return cashStateFromRecords(store.closings, store.withdrawals, "local");
+  }
+
+  const config = googleConfig();
+  const [closingRows, withdrawalRows] = await Promise.all([
+    readRows(config.closingsSheet, CLOSING_HEADERS),
+    readRows(config.withdrawalsSheet, WITHDRAWAL_HEADERS),
+  ]);
+
+  return cashStateFromRecords(
+    closingRecordsFromRows(closingRows),
+    withdrawalRecordsFromRows(withdrawalRows),
+    "sheets",
+  );
+}
+
 export async function appendClosingRecord(
   record: ClosingRecord,
 ): Promise<WorkspaceResult> {
   if (!isWorkspaceConfigured()) {
+    localStore().closings.push(record);
     return { persisted: false, mode: "local" };
   }
 
@@ -290,82 +527,39 @@ export async function appendClosingRecord(
     record.createdAt,
     record.person,
     record.shift,
+    record.previousCash,
     record.cashSales,
     record.cardSales,
     record.transferSales,
     record.uberSales,
-    record.withdrawnCash,
-    record.withdrawalDescription,
     record.expectedCash,
     record.countedCash,
     record.notes,
     JSON.stringify(record.denominations),
   ]);
 
-  const driveFileId = await writeDriveAuditFile("cierre", record);
+  const driveFileId = await tryWriteDriveAuditFile("cierre", record);
   return { persisted: true, mode: "sheets", driveFileId };
 }
 
-export async function deleteClosingRecord(recordId: string): Promise<DeleteResult> {
-  if (!recordId || !isWorkspaceConfigured()) {
-    return { persisted: false, mode: "local", deleted: false };
-  }
-
-  const config = googleConfig();
-  const sheetId = await getSheetId(config.closingsSheet);
-  const rowsResponse = await googleFetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/${encodeURIComponent(
-      sheetRange(config.closingsSheet, "A:A"),
-    )}`,
-  );
-  const rowsData = (await rowsResponse.json()) as { values?: string[][] };
-  const rowIndex = rowsData.values?.findIndex((row) => row[0] === recordId) ?? -1;
-
-  if (rowIndex < 1) {
-    return { persisted: true, mode: "sheets", deleted: false };
-  }
-
-  await googleFetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}:batchUpdate`,
-    {
-      method: "POST",
-      body: JSON.stringify({
-        requests: [
-          {
-            deleteDimension: {
-              range: {
-                sheetId,
-                dimension: "ROWS",
-                startIndex: rowIndex,
-                endIndex: rowIndex + 1,
-              },
-            },
-          },
-        ],
-      }),
-    },
-  );
-
-  return { persisted: true, mode: "sheets", deleted: true };
-}
-
-export async function appendAnnulmentRecord(
-  record: AnnulmentRecord,
+export async function appendWithdrawalRecord(
+  record: WithdrawalRecord,
 ): Promise<WorkspaceResult> {
   if (!isWorkspaceConfigured()) {
+    localStore().withdrawals.push(record);
     return { persisted: false, mode: "local" };
   }
 
   const config = googleConfig();
-  await appendRow(config.annulmentsSheet, ANNULMENT_HEADERS, [
-    record.annulmentId,
-    record.recordId,
+  await appendRow(config.withdrawalsSheet, WITHDRAWAL_HEADERS, [
+    record.withdrawalId,
     record.createdAt,
-    record.reason,
-    record.deleted ? "si" : "no",
-    record.mode,
+    record.person,
+    record.shift,
+    record.amount,
+    record.description,
   ]);
 
-  const driveFileId = await writeDriveAuditFile("anulacion", record);
+  const driveFileId = await tryWriteDriveAuditFile("retiro", record);
   return { persisted: true, mode: "sheets", driveFileId };
 }

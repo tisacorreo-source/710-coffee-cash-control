@@ -1,7 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 
+type View = "cierre" | "retiro";
 type Person = "Veronica" | "Rodrigo" | "David" | "Chisco";
 type Shift = "Manana" | "Tarde";
 type SelectValue<T extends string> = T | "";
@@ -18,11 +20,33 @@ type DenominationKey =
 
 type CashCounts = Record<DenominationKey, NumberValue>;
 
-const BASE_CASH = 1000;
-const LAST_CLOSING_ID_KEY = "710:last-closing-id";
+type CashState = {
+  baseCash: number;
+  cashLimit: number;
+  currentBalance: number;
+  lastClosingAt: string | null;
+  lastClosingId: string | null;
+  mode: "local" | "sheets";
+  persisted: boolean;
+  standardWithdrawal: number;
+  withdrawalsSinceLastClosing: number;
+};
 
 const people: Person[] = ["Veronica", "Rodrigo", "David", "Chisco"];
 const shifts: Shift[] = ["Manana", "Tarde"];
+const SUCCESS_MESSAGE_DURATION_MS = 2200;
+
+const defaultCashState: CashState = {
+  baseCash: 1000,
+  cashLimit: 4000,
+  currentBalance: 1000,
+  lastClosingAt: null,
+  lastClosingId: null,
+  mode: "local",
+  persisted: false,
+  standardWithdrawal: 3000,
+  withdrawalsSinceLastClosing: 0,
+};
 
 const denominations: Array<{
   key: DenominationKey;
@@ -42,19 +66,23 @@ const denominations: Array<{
 
 function emptyCounts(): CashCounts {
   return {
-    q200: "",
-    q100: "",
-    q50: "",
-    q20: "",
-    q10: "",
-    q5: "",
-    q1: "",
-    menores: "",
+    q200: 0,
+    q100: 0,
+    q50: 0,
+    q20: 0,
+    q10: 0,
+    q5: 0,
+    q1: 0,
+    menores: 0,
   };
 }
 
 function numeric(value: NumberValue) {
   return Number(value) || 0;
+}
+
+function hasNumber(value: NumberValue) {
+  return value !== "" && Number.isFinite(Number(value)) && Number(value) >= 0;
 }
 
 function cashTotal(counts: CashCounts) {
@@ -103,6 +131,7 @@ function SelectField<T extends string>({
     <label className="field">
       <span>{label}</span>
       <select
+        required
         value={value}
         onChange={(event) => onChange(event.target.value as SelectValue<T>)}
       >
@@ -134,6 +163,8 @@ function NumberField({
       <input
         inputMode="decimal"
         min={min}
+        required
+        step="0.01"
         type="number"
         value={value}
         onChange={(event) => {
@@ -160,6 +191,7 @@ function TextField({
     <label className="field field-wide">
       <span>{label}</span>
       <input
+        required
         value={value}
         placeholder={placeholder}
         onChange={(event) => onChange(event.target.value)}
@@ -183,6 +215,7 @@ function TextAreaField({
     <label className="field field-wide">
       <span>{label}</span>
       <textarea
+        required
         value={value}
         placeholder={placeholder}
         onChange={(event) => onChange(event.target.value)}
@@ -232,6 +265,7 @@ function DenominationCounter({
               </button>
               <input
                 min={0}
+                required
                 step={denomination.mode === "amount" ? "0.01" : "1"}
                 type="number"
                 value={value}
@@ -268,45 +302,122 @@ function TotalBox({ label, value }: { label: string; value: string }) {
   );
 }
 
+function TabButton({
+  active,
+  children,
+  onClick,
+}: {
+  active: boolean;
+  children: ReactNode;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className={`tab-button ${active ? "is-active" : ""}`}
+      type="button"
+      onClick={onClick}
+    >
+      {children}
+    </button>
+  );
+}
+
 export default function Home() {
+  const [activeView, setActiveView] = useState<View>("cierre");
   const [statusMessage, setStatusMessage] = useState("");
+  const statusTimerRef = useRef<number | null>(null);
+  const [cashState, setCashState] = useState<CashState>(defaultCashState);
   const [closingPerson, setClosingPerson] = useState<SelectValue<Person>>("");
   const [closingShift, setClosingShift] = useState<SelectValue<Shift>>("");
   const [cashSales, setCashSales] = useState<NumberValue>("");
   const [cardSales, setCardSales] = useState<NumberValue>("");
   const [transferSales, setTransferSales] = useState<NumberValue>("");
   const [uberSales, setUberSales] = useState<NumberValue>("");
-  const [withdrawnCash, setWithdrawnCash] = useState<NumberValue>("");
-  const [withdrawalDescription, setWithdrawalDescription] = useState("");
   const [closingCounts, setClosingCounts] = useState<CashCounts>(emptyCounts);
   const [closingNotes, setClosingNotes] = useState("");
-  const [lastClosingId, setLastClosingId] = useState("");
-  const [showAnnulment, setShowAnnulment] = useState(false);
-  const [managerPin, setManagerPin] = useState("");
-  const [annulmentReason, setAnnulmentReason] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isAnnuling, setIsAnnuling] = useState(false);
+  const [withdrawalPerson, setWithdrawalPerson] =
+    useState<SelectValue<Person>>("");
+  const [withdrawalShift, setWithdrawalShift] = useState<SelectValue<Shift>>("");
+  const [withdrawalAmount, setWithdrawalAmount] = useState<NumberValue>("");
+  const [withdrawalDescription, setWithdrawalDescription] = useState("");
+  const [isSubmittingClosing, setIsSubmittingClosing] = useState(false);
+  const [isSubmittingWithdrawal, setIsSubmittingWithdrawal] = useState(false);
 
   const closingCounted = useMemo(() => cashTotal(closingCounts), [closingCounts]);
-  const expectedCash = BASE_CASH + numeric(cashSales) - numeric(withdrawnCash);
+  const expectedCash = cashState.currentBalance + numeric(cashSales);
+  const needsCut = expectedCash > cashState.cashLimit;
 
-  function rememberClosingId(recordId: string) {
-    if (!recordId) {
-      forgetClosingId();
-      return;
+  function clearStatusTimer() {
+    if (statusTimerRef.current) {
+      window.clearTimeout(statusTimerRef.current);
+      statusTimerRef.current = null;
+    }
+  }
+
+  function clearStatusMessage() {
+    clearStatusTimer();
+    setStatusMessage("");
+  }
+
+  function showStatusMessage(message: string, autoHide = false) {
+    clearStatusTimer();
+    setStatusMessage(message);
+
+    if (autoHide) {
+      statusTimerRef.current = window.setTimeout(() => {
+        setStatusMessage("");
+        statusTimerRef.current = null;
+      }, SUCCESS_MESSAGE_DURATION_MS);
+    }
+  }
+
+  useEffect(() => {
+    let isActive = true;
+
+    async function loadInitialState() {
+      try {
+        const response = await fetch("/api/caja", { cache: "no-store" });
+        const result = await response.json();
+
+        if (!response.ok) {
+          throw new Error(result.message || "No se pudo cargar el saldo de caja.");
+        }
+
+        if (isActive) {
+          setCashState(result);
+        }
+      } catch (error) {
+        if (isActive) {
+          setStatusMessage(
+            error instanceof Error
+              ? error.message
+              : "No se pudo cargar el saldo de caja.",
+          );
+        }
+      }
     }
 
-    setLastClosingId(recordId);
-    window.localStorage.setItem(LAST_CLOSING_ID_KEY, recordId);
-  }
+    void loadInitialState();
 
-  function rememberedClosingId() {
-    return window.localStorage.getItem(LAST_CLOSING_ID_KEY) || "";
-  }
+    return () => {
+      isActive = false;
+    };
+  }, []);
 
-  function forgetClosingId() {
-    setLastClosingId("");
-    window.localStorage.removeItem(LAST_CLOSING_ID_KEY);
+  useEffect(() => {
+    return () => clearStatusTimer();
+  }, []);
+
+  async function refreshCashState() {
+    const response = await fetch("/api/caja", { cache: "no-store" });
+    const result = await response.json();
+
+    if (!response.ok) {
+      throw new Error(result.message || "No se pudo cargar el saldo de caja.");
+    }
+
+    setCashState(result);
+    return result as CashState;
   }
 
   function resetClosingForm() {
@@ -316,30 +427,37 @@ export default function Home() {
     setCardSales("");
     setTransferSales("");
     setUberSales("");
-    setWithdrawnCash("");
-    setWithdrawalDescription("");
     setClosingCounts(emptyCounts());
     setClosingNotes("");
   }
 
-  function resetAnnulmentForm() {
-    setManagerPin("");
-    setAnnulmentReason("");
+  function resetWithdrawalForm() {
+    setWithdrawalPerson("");
+    setWithdrawalShift("");
+    setWithdrawalAmount("");
+    setWithdrawalDescription("");
+  }
+
+  function closingFormIsComplete() {
+    return (
+      closingPerson &&
+      closingShift &&
+      hasNumber(cashSales) &&
+      hasNumber(cardSales) &&
+      hasNumber(transferSales) &&
+      hasNumber(uberSales) &&
+      closingNotes.trim()
+    );
   }
 
   async function submitClosing() {
-    if (!closingPerson || !closingShift) {
-      setStatusMessage("Falta elegir responsable y turno.");
+    if (!closingFormIsComplete()) {
+      showStatusMessage("Todos los campos del cierre son obligatorios.");
       return;
     }
 
-    if (numeric(withdrawnCash) > 0 && !withdrawalDescription.trim()) {
-      setStatusMessage("Falta describir el dinero retirado.");
-      return;
-    }
-
-    setIsSubmitting(true);
-    setStatusMessage("");
+    setIsSubmittingClosing(true);
+    clearStatusMessage();
 
     try {
       const response = await fetch("/api/cierres", {
@@ -352,9 +470,6 @@ export default function Home() {
           cardSales: numeric(cardSales),
           transferSales: numeric(transferSales),
           uberSales: numeric(uberSales),
-          withdrawnCash: numeric(withdrawnCash),
-          withdrawalDescription: withdrawalDescription.trim(),
-          expectedCash,
           countedCash: closingCounted,
           denominations: normalizedCounts(closingCounts),
           notes: closingNotes.trim(),
@@ -366,78 +481,63 @@ export default function Home() {
         throw new Error(result.message || "No se pudo enviar el cierre.");
       }
 
-      rememberClosingId(result.recordId || "");
       resetClosingForm();
-      resetAnnulmentForm();
-      setShowAnnulment(false);
-      setStatusMessage(
-        result.persisted
-          ? `Cierre enviado a Sheets. ID: ${result.recordId}.`
-          : `Cierre registrado en modo local. ID: ${result.recordId}.`,
-      );
+      await refreshCashState();
+      showStatusMessage("Cierre enviado.", true);
     } catch (error) {
-      setStatusMessage(
+      showStatusMessage(
         error instanceof Error
           ? error.message
           : "No se pudo enviar el cierre.",
       );
     } finally {
-      setIsSubmitting(false);
+      setIsSubmittingClosing(false);
     }
   }
 
-  async function handleAnnulment() {
-    if (!showAnnulment) {
-      setShowAnnulment(true);
+  async function submitWithdrawal() {
+    if (
+      !withdrawalPerson ||
+      !withdrawalShift ||
+      !hasNumber(withdrawalAmount) ||
+      numeric(withdrawalAmount) <= 0 ||
+      !withdrawalDescription.trim()
+    ) {
+      showStatusMessage("Todos los campos del dinero retirado son obligatorios.");
       return;
     }
 
-    if (!managerPin.trim()) {
-      setStatusMessage("Falta ingresar el PIN del manager.");
-      return;
-    }
-
-    if (!annulmentReason.trim()) {
-      setStatusMessage("Falta describir la razón de la anulación.");
-      return;
-    }
-
-    setIsAnnuling(true);
-    setStatusMessage("");
+    setIsSubmittingWithdrawal(true);
+    clearStatusMessage();
 
     try {
-      const response = await fetch("/api/cierres/anular", {
+      const response = await fetch("/api/retiros", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          recordId: lastClosingId || rememberedClosingId(),
-          managerPin,
-          reason: annulmentReason.trim(),
+          person: withdrawalPerson,
+          shift: withdrawalShift,
+          amount: numeric(withdrawalAmount),
+          description: withdrawalDescription.trim(),
         }),
       });
       const result = await response.json();
 
       if (!response.ok) {
-        throw new Error(result.message || "No se pudo anular el cierre.");
+        throw new Error(result.message || "No se pudo enviar el dinero retirado.");
       }
 
-      resetClosingForm();
-      resetAnnulmentForm();
-      forgetClosingId();
-      setShowAnnulment(false);
-      setStatusMessage(
-        result.deleted
-          ? "Cierre anulado. Puedes volver a registrar el turno."
-          : "Registro local anulado. Puedes volver a registrar el turno.",
-      );
+      resetWithdrawalForm();
+      await refreshCashState();
+      showStatusMessage("Dinero retirado enviado.", true);
     } catch (error) {
-      setStatusMessage(
+      showStatusMessage(
         error instanceof Error
           ? error.message
-          : "No se pudo anular el cierre.",
+          : "No se pudo enviar el dinero retirado.",
       );
     } finally {
-      setIsAnnuling(false);
+      setIsSubmittingWithdrawal(false);
     }
   }
 
@@ -445,119 +545,171 @@ export default function Home() {
     <main className="app-shell">
       <header className="app-header">
         <p>710 Coffee Bar</p>
-        <h1>Cierre de turno</h1>
+        <h1>Caja de turno</h1>
       </header>
+
+      <nav className="tab-bar" aria-label="Flujos de caja">
+        <TabButton
+          active={activeView === "cierre"}
+          onClick={() => setActiveView("cierre")}
+        >
+          Cierre
+        </TabButton>
+        <TabButton
+          active={activeView === "retiro"}
+          onClick={() => setActiveView("retiro")}
+        >
+          Dinero retirado
+        </TabButton>
+      </nav>
 
       {statusMessage && <div className="status-message">{statusMessage}</div>}
 
-      <section className="panel form-panel" aria-labelledby="closing-title">
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            void submitClosing();
-          }}
-        >
-          <div className="panel-header">
-            <div>
-              <p className="eyebrow">Cierre</p>
-              <h2 id="closing-title">Registrar cierre</h2>
+      {activeView === "cierre" && (
+        <section className="panel form-panel" aria-labelledby="closing-title">
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              void submitClosing();
+            }}
+          >
+            <div className="panel-header">
+              <div>
+                <p className="eyebrow">Cierre</p>
+                <h2 id="closing-title">Registrar cierre</h2>
+              </div>
             </div>
-            {lastClosingId && (
-              <span className="record-pill">ID {lastClosingId.slice(0, 8)}</span>
-            )}
-          </div>
 
-          <div className="form-grid">
-            <SelectField
-              label="Responsable"
-              value={closingPerson}
-              options={people}
-              onChange={setClosingPerson}
-            />
-            <SelectField
-              label="Turno"
-              value={closingShift}
-              options={shifts}
-              onChange={setClosingShift}
-            />
-            <NumberField
-              label="Ventas efectivo"
-              value={cashSales}
-              onChange={setCashSales}
-            />
-            <NumberField
-              label="Ventas tarjeta"
-              value={cardSales}
-              onChange={setCardSales}
-            />
-            <NumberField
-              label="Transferencias / otros"
-              value={transferSales}
-              onChange={setTransferSales}
-            />
-            <NumberField label="Uber Eats" value={uberSales} onChange={setUberSales} />
-            <NumberField
-              label="Dinero retirado"
-              value={withdrawnCash}
-              onChange={setWithdrawnCash}
-            />
-            <TextField
-              label="Descripción del dinero retirado"
-              value={withdrawalDescription}
-              onChange={setWithdrawalDescription}
-              placeholder="Ej. entrega a manager, depósito, proveedor"
-            />
-          </div>
-
-          <DenominationCounter counts={closingCounts} onChange={setClosingCounts} />
-
-          <div className="closing-result">
-            <TotalBox label="Caja esperada" value={money(expectedCash)} />
-            <TotalBox label="Caja contada" value={money(closingCounted)} />
-          </div>
-
-          <TextAreaField
-            label="Observaciones"
-            value={closingNotes}
-            onChange={setClosingNotes}
-            placeholder="Opcional"
-          />
-
-          <button className="submit-button" disabled={isSubmitting} type="submit">
-            {isSubmitting ? "Enviando cierre" : "Enviar cierre"}
-          </button>
-        </form>
-
-        <div className="annulment-zone">
-          {showAnnulment && (
-            <div className="annulment-fields">
-              <label className="field">
-                <span>PIN manager</span>
-                <input
-                  type="password"
-                  value={managerPin}
-                  onChange={(event) => setManagerPin(event.target.value)}
-                />
-              </label>
-              <TextAreaField
-                label="Razón de anulación"
-                value={annulmentReason}
-                onChange={setAnnulmentReason}
-                placeholder="Ej. error de conteo o cierre duplicado"
+            <div className="form-grid">
+              <SelectField
+                label="Responsable"
+                value={closingPerson}
+                options={people}
+                onChange={setClosingPerson}
+              />
+              <SelectField
+                label="Turno"
+                value={closingShift}
+                options={shifts}
+                onChange={setClosingShift}
+              />
+              <NumberField
+                label="Ventas efectivo"
+                value={cashSales}
+                onChange={setCashSales}
+              />
+              <NumberField
+                label="Ventas tarjeta"
+                value={cardSales}
+                onChange={setCardSales}
+              />
+              <NumberField
+                label="Transferencias / otros"
+                value={transferSales}
+                onChange={setTransferSales}
+              />
+              <NumberField
+                label="Uber Eats"
+                value={uberSales}
+                onChange={setUberSales}
               />
             </div>
-          )}
 
-          <button
-            className="danger-button"
-            disabled={isAnnuling}
-            type="button"
-            onClick={() => void handleAnnulment()}
+            <DenominationCounter counts={closingCounts} onChange={setClosingCounts} />
+
+            <div className="closing-result">
+              <TotalBox label="Saldo anterior" value={money(cashState.currentBalance)} />
+              <TotalBox label="Caja esperada" value={money(expectedCash)} />
+              <TotalBox label="Caja contada" value={money(closingCounted)} />
+            </div>
+
+            {needsCut && (
+              <div className="cash-alert">
+                <strong>Corte de caja pendiente</strong>
+                <span>
+                  La caja supera {money(cashState.cashLimit)}. El corte estandar es{" "}
+                  {money(cashState.standardWithdrawal)}.
+                </span>
+              </div>
+            )}
+
+            <TextAreaField
+              label="Observaciones"
+              value={closingNotes}
+              onChange={setClosingNotes}
+              placeholder="Detalle del cierre"
+            />
+
+            <button
+              className="submit-button"
+              disabled={isSubmittingClosing}
+              type="submit"
+            >
+              {isSubmittingClosing ? "Enviando cierre" : "Enviar cierre"}
+            </button>
+          </form>
+        </section>
+      )}
+
+      {activeView === "retiro" && (
+        <section className="panel form-panel" aria-labelledby="withdrawal-title">
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              void submitWithdrawal();
+            }}
           >
-            {isAnnuling ? "Anulando" : "Anular"}
-          </button>
-        </div>
-      </section>
+            <div className="panel-header">
+              <div>
+                <p className="eyebrow">Corte</p>
+                <h2 id="withdrawal-title">Dinero retirado</h2>
+              </div>
+            </div>
+
+            <div className="form-grid">
+              <SelectField
+                label="Responsable"
+                value={withdrawalPerson}
+                options={people}
+                onChange={setWithdrawalPerson}
+              />
+              <SelectField
+                label="Turno"
+                value={withdrawalShift}
+                options={shifts}
+                onChange={setWithdrawalShift}
+              />
+              <NumberField
+                label="Monto retirado"
+                value={withdrawalAmount}
+                onChange={setWithdrawalAmount}
+              />
+              <TextField
+                label="Descripción"
+                value={withdrawalDescription}
+                onChange={setWithdrawalDescription}
+                placeholder="Ej. corte de caja, entrega a manager"
+              />
+            </div>
+
+            <div className="closing-result">
+              <TotalBox label="Saldo actual" value={money(cashState.currentBalance)} />
+              <TotalBox
+                label="Saldo después del retiro"
+                value={money(cashState.currentBalance - numeric(withdrawalAmount))}
+              />
+            </div>
+
+            <button
+              className="submit-button"
+              disabled={isSubmittingWithdrawal}
+              type="submit"
+            >
+              {isSubmittingWithdrawal ? "Enviando retiro" : "Enviar dinero retirado"}
+            </button>
+          </form>
+        </section>
+      )}
     </main>
   );
 }
