@@ -11,7 +11,6 @@ test("cash-control prototype separates closing and withdrawals", async () => {
   assert.match(page, /Monto retirado/);
   assert.match(page, /Saldo anterior/);
   assert.match(page, /Caja esperada/);
-  assert.match(page, /Caja contada/);
   assert.match(page, /Corte de caja pendiente/);
   assert.match(page, /Cierre enviado/);
   assert.match(page, /Dinero retirado enviado/);
@@ -21,6 +20,9 @@ test("cash-control prototype separates closing and withdrawals", async () => {
   assert.doesNotMatch(page, /Corrección \/ Anulación/);
   assert.doesNotMatch(page, /Anular/);
   assert.doesNotMatch(page, /Descripción del dinero retirado/);
+  assert.doesNotMatch(page, /Caja contada/);
+  assert.doesNotMatch(page, /Billetes Q/);
+  assert.doesNotMatch(page, /Monedas/);
   assert.doesNotMatch(page, /registrado en modo local/);
   assert.doesNotMatch(page, /enviado a Sheets/);
   assert.doesNotMatch(page, /retiro sugerido/i);
@@ -35,6 +37,10 @@ test("backend exposes separate cash state and withdrawal routes", async () => {
     new URL("../app/api/retiros/route.ts", import.meta.url),
     "utf8",
   );
+  const closingRoute = await readFile(
+    new URL("../app/api/cierres/route.ts", import.meta.url),
+    "utf8",
+  );
   const workspace = await readFile(
     new URL("../lib/googleWorkspace.ts", import.meta.url),
     "utf8",
@@ -42,6 +48,8 @@ test("backend exposes separate cash state and withdrawal routes", async () => {
 
   assert.match(cashRoute, /getCashState/);
   assert.match(withdrawalRoute, /appendWithdrawalRecord/);
+  assert.doesNotMatch(closingRoute, /body\.countedCash/);
+  assert.doesNotMatch(closingRoute, /cleanDenominations/);
   assert.match(workspace, /GOOGLE_SHEETS_WITHDRAWALS_SHEET/);
   assert.match(workspace, /GOOGLE_SERVICE_ACCOUNT_JSON/);
   assert.match(workspace, /STANDARD_WITHDRAWAL = 3000/);

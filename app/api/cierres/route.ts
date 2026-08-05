@@ -9,17 +9,6 @@ import {
 
 export const runtime = "nodejs";
 
-const denominationKeys = [
-  "q200",
-  "q100",
-  "q50",
-  "q20",
-  "q10",
-  "q5",
-  "q1",
-  "menores",
-];
-
 function optionalAmount(value: unknown) {
   const numberValue = Number(value);
   return Number.isFinite(numberValue) ? Math.max(0, numberValue) : 0;
@@ -33,26 +22,6 @@ function hasAmount(value: unknown) {
 
 function text(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
-}
-
-function cleanDenominations(value: unknown) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return { denominations: {}, missing: denominationKeys };
-  }
-
-  const denominations = Object.fromEntries(
-    denominationKeys.map((key) => [
-      key,
-      hasAmount((value as Record<string, unknown>)[key])
-        ? optionalAmount((value as Record<string, unknown>)[key])
-        : 0,
-    ]),
-  );
-  const missing = denominationKeys.filter(
-    (key) => !hasAmount((value as Record<string, unknown>)[key]),
-  );
-
-  return { denominations, missing };
 }
 
 export async function POST(request: Request) {
@@ -69,20 +38,10 @@ export async function POST(request: Request) {
       !hasAmount(body.cashSales) ||
       !hasAmount(body.cardSales) ||
       !hasAmount(body.transferSales) ||
-      !hasAmount(body.uberSales) ||
-      !hasAmount(body.countedCash)
+      !hasAmount(body.uberSales)
     ) {
       return NextResponse.json(
         { message: "Todos los campos del cierre son obligatorios." },
-        { status: 400 },
-      );
-    }
-
-    const { denominations, missing } = cleanDenominations(body.denominations);
-
-    if (missing.length > 0) {
-      return NextResponse.json(
-        { message: "Todas las denominaciones son obligatorias." },
         { status: 400 },
       );
     }
@@ -101,8 +60,8 @@ export async function POST(request: Request) {
       transferSales: optionalAmount(body.transferSales),
       uberSales: optionalAmount(body.uberSales),
       expectedCash,
-      countedCash: optionalAmount(body.countedCash),
-      denominations,
+      countedCash: expectedCash,
+      denominations: {},
       notes,
     };
 

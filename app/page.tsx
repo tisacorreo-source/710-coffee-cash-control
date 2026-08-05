@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 type View = "cierre" | "retiro";
@@ -8,17 +8,6 @@ type Person = "Veronica" | "Rodrigo" | "David" | "Chisco";
 type Shift = "Manana" | "Tarde";
 type SelectValue<T extends string> = T | "";
 type NumberValue = number | "";
-type DenominationKey =
-  | "q200"
-  | "q100"
-  | "q50"
-  | "q20"
-  | "q10"
-  | "q5"
-  | "q1"
-  | "menores";
-
-type CashCounts = Record<DenominationKey, NumberValue>;
 
 type CashState = {
   baseCash: number;
@@ -48,35 +37,6 @@ const defaultCashState: CashState = {
   withdrawalsSinceLastClosing: 0,
 };
 
-const denominations: Array<{
-  key: DenominationKey;
-  label: string;
-  value: number;
-  mode: "count" | "amount";
-}> = [
-  { key: "q200", label: "Billetes Q200", value: 200, mode: "count" },
-  { key: "q100", label: "Billetes Q100", value: 100, mode: "count" },
-  { key: "q50", label: "Billetes Q50", value: 50, mode: "count" },
-  { key: "q20", label: "Billetes Q20", value: 20, mode: "count" },
-  { key: "q10", label: "Billetes Q10", value: 10, mode: "count" },
-  { key: "q5", label: "Billetes Q5", value: 5, mode: "count" },
-  { key: "q1", label: "Monedas Q1", value: 1, mode: "count" },
-  { key: "menores", label: "Monedas menores", value: 1, mode: "amount" },
-];
-
-function emptyCounts(): CashCounts {
-  return {
-    q200: 0,
-    q100: 0,
-    q50: 0,
-    q20: 0,
-    q10: 0,
-    q5: 0,
-    q1: 0,
-    menores: 0,
-  };
-}
-
 function numeric(value: NumberValue) {
   return Number(value) || 0;
 }
@@ -85,33 +45,11 @@ function hasNumber(value: NumberValue) {
   return value !== "" && Number.isFinite(Number(value)) && Number(value) >= 0;
 }
 
-function cashTotal(counts: CashCounts) {
-  return denominations.reduce((total, denomination) => {
-    const rawValue = numeric(counts[denomination.key]);
-    return (
-      total +
-      (denomination.mode === "amount"
-        ? rawValue
-        : rawValue * denomination.value)
-    );
-  }, 0);
-}
-
 function money(value: number) {
   return `Q${value.toLocaleString("en-US", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
-}
-
-function normalizedCounts(counts: CashCounts): Record<DenominationKey, number> {
-  return denominations.reduce(
-    (totals, denomination) => ({
-      ...totals,
-      [denomination.key]: numeric(counts[denomination.key]),
-    }),
-    {} as Record<DenominationKey, number>,
-  );
 }
 
 function SelectField<T extends string>({
@@ -224,75 +162,6 @@ function TextAreaField({
   );
 }
 
-function DenominationCounter({
-  counts,
-  onChange,
-}: {
-  counts: CashCounts;
-  onChange: (counts: CashCounts) => void;
-}) {
-  function setValue(key: DenominationKey, value: NumberValue) {
-    onChange({ ...counts, [key]: value === "" ? "" : Math.max(0, value) });
-  }
-
-  return (
-    <div className="denomination-grid">
-      {denominations.map((denomination) => {
-        const value = counts[denomination.key];
-        const numericValue = numeric(value);
-        const subtotal =
-          denomination.mode === "amount"
-            ? numericValue
-            : numericValue * denomination.value;
-
-        return (
-          <div className="denomination-row" key={denomination.key}>
-            <div className="denomination-label">
-              <strong>{denomination.label}</strong>
-              <span>
-                {denomination.mode === "amount"
-                  ? "Total en Q"
-                  : `${money(denomination.value)} c/u`}
-              </span>
-            </div>
-            <div className="stepper">
-              <button
-                aria-label={`Bajar ${denomination.label}`}
-                type="button"
-                onClick={() => setValue(denomination.key, numericValue - 1)}
-              >
-                -
-              </button>
-              <input
-                min={0}
-                required
-                step={denomination.mode === "amount" ? "0.01" : "1"}
-                type="number"
-                value={value}
-                onChange={(event) => {
-                  const nextValue = event.target.value;
-                  setValue(
-                    denomination.key,
-                    nextValue === "" ? "" : Number(nextValue) || 0,
-                  );
-                }}
-              />
-              <button
-                aria-label={`Subir ${denomination.label}`}
-                type="button"
-                onClick={() => setValue(denomination.key, numericValue + 1)}
-              >
-                +
-              </button>
-            </div>
-            <strong className="row-total">{money(subtotal)}</strong>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
 function TotalBox({ label, value }: { label: string; value: string }) {
   return (
     <div className="total-box">
@@ -333,7 +202,6 @@ export default function Home() {
   const [cardSales, setCardSales] = useState<NumberValue>("");
   const [transferSales, setTransferSales] = useState<NumberValue>("");
   const [uberSales, setUberSales] = useState<NumberValue>("");
-  const [closingCounts, setClosingCounts] = useState<CashCounts>(emptyCounts);
   const [closingNotes, setClosingNotes] = useState("");
   const [withdrawalPerson, setWithdrawalPerson] =
     useState<SelectValue<Person>>("");
@@ -343,7 +211,6 @@ export default function Home() {
   const [isSubmittingClosing, setIsSubmittingClosing] = useState(false);
   const [isSubmittingWithdrawal, setIsSubmittingWithdrawal] = useState(false);
 
-  const closingCounted = useMemo(() => cashTotal(closingCounts), [closingCounts]);
   const expectedCash = cashState.currentBalance + numeric(cashSales);
   const needsCut = expectedCash > cashState.cashLimit;
 
@@ -427,7 +294,6 @@ export default function Home() {
     setCardSales("");
     setTransferSales("");
     setUberSales("");
-    setClosingCounts(emptyCounts());
     setClosingNotes("");
   }
 
@@ -470,8 +336,6 @@ export default function Home() {
           cardSales: numeric(cardSales),
           transferSales: numeric(transferSales),
           uberSales: numeric(uberSales),
-          countedCash: closingCounted,
-          denominations: normalizedCounts(closingCounts),
           notes: closingNotes.trim(),
         }),
       });
@@ -615,12 +479,9 @@ export default function Home() {
               />
             </div>
 
-            <DenominationCounter counts={closingCounts} onChange={setClosingCounts} />
-
             <div className="closing-result">
               <TotalBox label="Saldo anterior" value={money(cashState.currentBalance)} />
               <TotalBox label="Caja esperada" value={money(expectedCash)} />
-              <TotalBox label="Caja contada" value={money(closingCounted)} />
             </div>
 
             {needsCut && (
