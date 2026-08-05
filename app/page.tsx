@@ -2,11 +2,8 @@
 
 import { useMemo, useState } from "react";
 
-type Action = "apertura" | "cierre" | "movimiento" | "admin";
 type Person = "Veronica" | "Rodrigo" | "David" | "Chisco";
 type Shift = "Manana" | "Tarde";
-type MovementType = "gasto" | "retiro";
-type AdminAction = "correccion" | "anulacion";
 type SelectValue<T extends string> = T | "";
 type NumberValue = number | "";
 type DenominationKey =
@@ -21,32 +18,8 @@ type DenominationKey =
 
 type CashCounts = Record<DenominationKey, NumberValue>;
 
-type ShiftState = {
-  person: Person;
-  initialCash: number;
-  openedAt: string;
-};
-
-type MovementRecord = {
-  person: Person;
-  shift: Shift;
-  type: MovementType;
-  description: string;
-  amount: number;
-  notes: string;
-  createdAt: string;
-};
-
-type AdminRecord = {
-  action: AdminAction;
-  reference: string;
-  reason: string;
-  createdAt: string;
-};
-
 const BASE_CASH = 1000;
-const CASH_LIMIT = 4000;
-const ADMIN_PIN = "0710";
+const LAST_CLOSING_ID_KEY = "710:last-closing-id";
 
 const people: Person[] = ["Veronica", "Rodrigo", "David", "Chisco"];
 const shifts: Shift[] = ["Manana", "Tarde"];
@@ -66,11 +39,6 @@ const denominations: Array<{
   { key: "q1", label: "Monedas Q1", value: 1, mode: "count" },
   { key: "menores", label: "Monedas menores", value: 1, mode: "amount" },
 ];
-
-const quickReasons: Record<MovementType, string[]> = {
-  gasto: ["Hielo", "Proveedor", "Compra de caja", "Otro gasto"],
-  retiro: ["Cierre parcial", "Entrega a manager", "Deposito", "Otro retiro"],
-};
 
 function emptyCounts(): CashCounts {
   return {
@@ -108,37 +76,13 @@ function money(value: number) {
   })}`;
 }
 
-function nowLabel() {
-  return new Date().toLocaleString("es-GT", {
-    dateStyle: "medium",
-    timeStyle: "short",
-    timeZone: "America/Guatemala",
-  });
-}
-
-function differenceTone(value: number) {
-  if (value > 0) return "positive";
-  if (value < 0) return "negative";
-  return "neutral";
-}
-
-function ActionButton({
-  active,
-  label,
-  onClick,
-}: {
-  active: boolean;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      className={`action-button ${active ? "is-active" : ""}`}
-      type="button"
-      onClick={onClick}
-    >
-      {label}
-    </button>
+function normalizedCounts(counts: CashCounts): Record<DenominationKey, number> {
+  return denominations.reduce(
+    (totals, denomination) => ({
+      ...totals,
+      [denomination.key]: numeric(counts[denomination.key]),
+    }),
+    {} as Record<DenominationKey, number>,
   );
 }
 
@@ -158,7 +102,10 @@ function SelectField<T extends string>({
   return (
     <label className="field">
       <span>{label}</span>
-      <select value={value} onChange={(event) => onChange(event.target.value as SelectValue<T>)}>
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value as SelectValue<T>)}
+      >
         <option value="">{placeholder}</option>
         {options.map((option) => (
           <option key={option} value={option}>
@@ -185,6 +132,7 @@ function NumberField({
     <label className="field">
       <span>{label}</span>
       <input
+        inputMode="decimal"
         min={min}
         type="number"
         value={value}
@@ -284,6 +232,7 @@ function DenominationCounter({
               </button>
               <input
                 min={0}
+                step={denomination.mode === "amount" ? "0.01" : "1"}
                 type="number"
                 value={value}
                 onChange={(event) => {
@@ -310,17 +259,9 @@ function DenominationCounter({
   );
 }
 
-function TotalBox({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: string;
-  tone?: "positive" | "negative" | "neutral";
-}) {
+function TotalBox({ label, value }: { label: string; value: string }) {
   return (
-    <div className={`total-box ${tone ? `tone-${tone}` : ""}`}>
+    <div className="total-box">
       <span>{label}</span>
       <strong>{value}</strong>
     </div>
@@ -328,87 +269,44 @@ function TotalBox({
 }
 
 export default function Home() {
-  const [action, setAction] = useState<Action>("apertura");
   const [statusMessage, setStatusMessage] = useState("");
-  const [activeShifts, setActiveShifts] = useState<Partial<Record<Shift, ShiftState>>>({});
-  const [movements, setMovements] = useState<MovementRecord[]>([]);
-  const [, setAdminRecords] = useState<AdminRecord[]>([]);
-
-  const [openingPerson, setOpeningPerson] = useState<SelectValue<Person>>("");
-  const [openingShift, setOpeningShift] = useState<SelectValue<Shift>>("");
-  const [openingCounts, setOpeningCounts] = useState<CashCounts>(emptyCounts);
-  const [openingNotes, setOpeningNotes] = useState("");
-
   const [closingPerson, setClosingPerson] = useState<SelectValue<Person>>("");
   const [closingShift, setClosingShift] = useState<SelectValue<Shift>>("");
   const [cashSales, setCashSales] = useState<NumberValue>("");
   const [cardSales, setCardSales] = useState<NumberValue>("");
   const [transferSales, setTransferSales] = useState<NumberValue>("");
   const [uberSales, setUberSales] = useState<NumberValue>("");
+  const [withdrawnCash, setWithdrawnCash] = useState<NumberValue>("");
+  const [withdrawalDescription, setWithdrawalDescription] = useState("");
   const [closingCounts, setClosingCounts] = useState<CashCounts>(emptyCounts);
   const [closingNotes, setClosingNotes] = useState("");
+  const [lastClosingId, setLastClosingId] = useState("");
+  const [showAnnulment, setShowAnnulment] = useState(false);
+  const [managerPin, setManagerPin] = useState("");
+  const [annulmentReason, setAnnulmentReason] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isAnnuling, setIsAnnuling] = useState(false);
 
-  const [movementPerson, setMovementPerson] = useState<SelectValue<Person>>("");
-  const [movementShift, setMovementShift] = useState<SelectValue<Shift>>("");
-  const [movementType, setMovementType] = useState<SelectValue<MovementType>>("");
-  const [movementDescription, setMovementDescription] = useState("");
-  const [movementAmount, setMovementAmount] = useState<NumberValue>("");
-  const [movementCashNow, setMovementCashNow] = useState<NumberValue>("");
-  const [movementNotes, setMovementNotes] = useState("");
-
-  const [adminAction, setAdminAction] = useState<SelectValue<AdminAction>>("");
-  const [adminReference, setAdminReference] = useState("");
-  const [adminReason, setAdminReason] = useState("");
-  const [adminPin, setAdminPin] = useState("");
-
-  const openingTotal = useMemo(() => cashTotal(openingCounts), [openingCounts]);
   const closingCounted = useMemo(() => cashTotal(closingCounts), [closingCounts]);
+  const expectedCash = BASE_CASH + numeric(cashSales) - numeric(withdrawnCash);
 
-  const movementSuggestion =
-    numeric(movementCashNow) >= CASH_LIMIT
-      ? Math.max(numeric(movementCashNow) - BASE_CASH, 0)
-      : 0;
+  function rememberClosingId(recordId: string) {
+    if (!recordId) {
+      forgetClosingId();
+      return;
+    }
 
-  const closingMovements = closingShift
-    ? movements.filter((movement) => movement.shift === closingShift)
-    : [];
-
-  const expenseTotal = closingMovements
-    .filter((movement) => movement.type === "gasto")
-    .reduce((sum, movement) => sum + movement.amount, 0);
-
-  const withdrawalTotal = closingMovements
-    .filter((movement) => movement.type === "retiro")
-    .reduce((sum, movement) => sum + movement.amount, 0);
-
-  const closingInitialCash = closingShift
-    ? activeShifts[closingShift]?.initialCash || BASE_CASH
-    : BASE_CASH;
-  const totalSales =
-    numeric(cashSales) +
-    numeric(cardSales) +
-    numeric(transferSales) +
-    numeric(uberSales);
-  const expectedCash =
-    closingInitialCash + numeric(cashSales) - expenseTotal - withdrawalTotal;
-  const closingDifference = closingCounted - expectedCash;
-  const cashToSeparate = Math.max(closingCounted - BASE_CASH, 0);
-
-  function resetOpeningForm() {
-    setOpeningPerson("");
-    setOpeningShift("");
-    setOpeningCounts(emptyCounts());
-    setOpeningNotes("");
+    setLastClosingId(recordId);
+    window.localStorage.setItem(LAST_CLOSING_ID_KEY, recordId);
   }
 
-  function resetMovementForm() {
-    setMovementPerson("");
-    setMovementShift("");
-    setMovementType("");
-    setMovementDescription("");
-    setMovementAmount("");
-    setMovementCashNow("");
-    setMovementNotes("");
+  function rememberedClosingId() {
+    return window.localStorage.getItem(LAST_CLOSING_ID_KEY) || "";
+  }
+
+  function forgetClosingId() {
+    setLastClosingId("");
+    window.localStorage.removeItem(LAST_CLOSING_ID_KEY);
   }
 
   function resetClosingForm() {
@@ -418,394 +316,247 @@ export default function Home() {
     setCardSales("");
     setTransferSales("");
     setUberSales("");
+    setWithdrawnCash("");
+    setWithdrawalDescription("");
     setClosingCounts(emptyCounts());
     setClosingNotes("");
   }
 
-  function resetAdminForm() {
-    setAdminAction("");
-    setAdminReference("");
-    setAdminReason("");
-    setAdminPin("");
+  function resetAnnulmentForm() {
+    setManagerPin("");
+    setAnnulmentReason("");
   }
 
-  function submitOpening() {
-    if (!openingPerson || !openingShift) {
-      setStatusMessage("Falta elegir responsable y turno.");
-      return;
-    }
-
-    setActiveShifts((current) => ({
-      ...current,
-      [openingShift]: {
-        person: openingPerson,
-        initialCash: openingTotal,
-        openedAt: nowLabel(),
-      },
-    }));
-    resetOpeningForm();
-    setStatusMessage(`Apertura enviada. Total registrado: ${money(openingTotal)}.`);
-  }
-
-  function submitMovement() {
-    if (
-      !movementPerson ||
-      !movementShift ||
-      !movementType ||
-      !movementDescription.trim() ||
-      numeric(movementAmount) <= 0
-    ) {
-      setStatusMessage("Falta responsable, turno, tipo, descripción o monto.");
-      return;
-    }
-
-    setMovements((current) => [
-      ...current,
-      {
-        person: movementPerson,
-        shift: movementShift,
-        type: movementType,
-        description: movementDescription.trim(),
-        amount: numeric(movementAmount),
-        notes: movementNotes,
-        createdAt: nowLabel(),
-      },
-    ]);
-    resetMovementForm();
-    setStatusMessage("Movimiento enviado. Formulario limpio.");
-  }
-
-  function submitClosing() {
+  async function submitClosing() {
     if (!closingPerson || !closingShift) {
       setStatusMessage("Falta elegir responsable y turno.");
       return;
     }
 
-    setActiveShifts((current) => {
-      const next = { ...current };
-      delete next[closingShift];
-      return next;
-    });
-    setMovements((current) =>
-      current.filter((movement) => movement.shift !== closingShift),
-    );
-    resetClosingForm();
-    setStatusMessage(
-      `Cierre enviado. Diferencia registrada: ${money(closingDifference)}.`,
-    );
+    if (numeric(withdrawnCash) > 0 && !withdrawalDescription.trim()) {
+      setStatusMessage("Falta describir el dinero retirado.");
+      return;
+    }
+
+    setIsSubmitting(true);
+    setStatusMessage("");
+
+    try {
+      const response = await fetch("/api/cierres", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          person: closingPerson,
+          shift: closingShift,
+          cashSales: numeric(cashSales),
+          cardSales: numeric(cardSales),
+          transferSales: numeric(transferSales),
+          uberSales: numeric(uberSales),
+          withdrawnCash: numeric(withdrawnCash),
+          withdrawalDescription: withdrawalDescription.trim(),
+          expectedCash,
+          countedCash: closingCounted,
+          denominations: normalizedCounts(closingCounts),
+          notes: closingNotes.trim(),
+        }),
+      });
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.message || "No se pudo enviar el cierre.");
+      }
+
+      rememberClosingId(result.recordId || "");
+      resetClosingForm();
+      resetAnnulmentForm();
+      setShowAnnulment(false);
+      setStatusMessage(
+        result.persisted
+          ? `Cierre enviado a Sheets. ID: ${result.recordId}.`
+          : `Cierre registrado en modo local. ID: ${result.recordId}.`,
+      );
+    } catch (error) {
+      setStatusMessage(
+        error instanceof Error
+          ? error.message
+          : "No se pudo enviar el cierre.",
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
   }
 
-  function submitAdmin() {
-    if (adminPin !== ADMIN_PIN) {
-      setStatusMessage("PIN admin incorrecto.");
+  async function handleAnnulment() {
+    if (!showAnnulment) {
+      setShowAnnulment(true);
       return;
     }
 
-    if (!adminAction || !adminReference.trim() || !adminReason.trim()) {
-      setStatusMessage("Falta acción, referencia o razón.");
+    if (!managerPin.trim()) {
+      setStatusMessage("Falta ingresar el PIN del manager.");
       return;
     }
 
-    setAdminRecords((current) => [
-      ...current,
-      {
-        action: adminAction,
-        reference: adminReference.trim(),
-        reason: adminReason.trim(),
-        createdAt: nowLabel(),
-      },
-    ]);
-    resetAdminForm();
-    setStatusMessage("Corrección/anulación enviada.");
+    if (!annulmentReason.trim()) {
+      setStatusMessage("Falta describir la razón de la anulación.");
+      return;
+    }
+
+    setIsAnnuling(true);
+    setStatusMessage("");
+
+    try {
+      const response = await fetch("/api/cierres/anular", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          recordId: lastClosingId || rememberedClosingId(),
+          managerPin,
+          reason: annulmentReason.trim(),
+        }),
+      });
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.message || "No se pudo anular el cierre.");
+      }
+
+      resetClosingForm();
+      resetAnnulmentForm();
+      forgetClosingId();
+      setShowAnnulment(false);
+      setStatusMessage(
+        result.deleted
+          ? "Cierre anulado. Puedes volver a registrar el turno."
+          : "Registro local anulado. Puedes volver a registrar el turno.",
+      );
+    } catch (error) {
+      setStatusMessage(
+        error instanceof Error
+          ? error.message
+          : "No se pudo anular el cierre.",
+      );
+    } finally {
+      setIsAnnuling(false);
+    }
   }
 
   return (
     <main className="app-shell">
       <header className="app-header">
         <p>710 Coffee Bar</p>
-        <h1>Control de Caja</h1>
+        <h1>Cierre de turno</h1>
       </header>
-
-      <nav className="action-grid" aria-label="Acciones principales">
-        <ActionButton
-          active={action === "apertura"}
-          label="Abrir turno"
-          onClick={() => setAction("apertura")}
-        />
-        <ActionButton
-          active={action === "cierre"}
-          label="Cerrar turno"
-          onClick={() => setAction("cierre")}
-        />
-        <ActionButton
-          active={action === "movimiento"}
-          label="Movimiento de caja"
-          onClick={() => setAction("movimiento")}
-        />
-        <ActionButton
-          active={action === "admin"}
-          label="Corrección / Anulación"
-          onClick={() => setAction("admin")}
-        />
-      </nav>
 
       {statusMessage && <div className="status-message">{statusMessage}</div>}
 
-      <section className="panel form-panel">
-        {action === "apertura" && (
-          <>
-            <div className="panel-header">
-              <div>
-                <p className="eyebrow">Apertura</p>
-                <h2>Abrir turno</h2>
-              </div>
+      <section className="panel form-panel" aria-labelledby="closing-title">
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            void submitClosing();
+          }}
+        >
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">Cierre</p>
+              <h2 id="closing-title">Registrar cierre</h2>
             </div>
-
-            <div className="form-grid">
-              <SelectField
-                label="Responsable"
-                value={openingPerson}
-                options={people}
-                onChange={setOpeningPerson}
-              />
-              <SelectField
-                label="Turno"
-                value={openingShift}
-                options={shifts}
-                onChange={setOpeningShift}
-              />
-            </div>
-
-            <DenominationCounter counts={openingCounts} onChange={setOpeningCounts} />
-
-            <TotalBox label="Total de dinero en caja" value={money(openingTotal)} />
-
-            <TextAreaField
-              label="Observaciones"
-              value={openingNotes}
-              onChange={setOpeningNotes}
-              placeholder="Opcional"
-            />
-
-            <button className="submit-button" type="button" onClick={submitOpening}>
-              Enviar apertura
-            </button>
-          </>
-        )}
-
-        {action === "cierre" && (
-          <>
-            <div className="panel-header">
-              <div>
-                <p className="eyebrow">Cierre</p>
-                <h2>Cerrar turno</h2>
-              </div>
-            </div>
-
-            <div className="form-grid">
-              <SelectField
-                label="Responsable"
-                value={closingPerson}
-                options={people}
-                onChange={setClosingPerson}
-              />
-              <SelectField
-                label="Turno"
-                value={closingShift}
-                options={shifts}
-                onChange={setClosingShift}
-              />
-              <NumberField
-                label="Ventas efectivo"
-                value={cashSales}
-                onChange={setCashSales}
-              />
-              <NumberField
-                label="Ventas tarjeta"
-                value={cardSales}
-                onChange={setCardSales}
-              />
-              <NumberField
-                label="Transferencias / otros"
-                value={transferSales}
-                onChange={setTransferSales}
-              />
-              <NumberField label="Uber Eats" value={uberSales} onChange={setUberSales} />
-            </div>
-
-            <div className="mini-totals">
-              <TotalBox label="Caja inicial" value={money(closingInitialCash)} />
-              <TotalBox label="Ventas totales" value={money(totalSales)} />
-              <TotalBox label="Gastos del turno" value={money(expenseTotal)} />
-              <TotalBox label="Retiros del turno" value={money(withdrawalTotal)} />
-            </div>
-
-            <DenominationCounter counts={closingCounts} onChange={setClosingCounts} />
-
-            <div className="closing-result">
-              <TotalBox label="Caja esperada" value={money(expectedCash)} />
-              <TotalBox label="Caja contada" value={money(closingCounted)} />
-              <TotalBox
-                label="Diferencia"
-                value={money(closingDifference)}
-                tone={differenceTone(closingDifference)}
-              />
-              <TotalBox label="Dejar en caja" value={money(BASE_CASH)} />
-              <TotalBox label="Guardar aparte" value={money(cashToSeparate)} />
-            </div>
-
-            <TextAreaField
-              label="Observaciones"
-              value={closingNotes}
-              onChange={setClosingNotes}
-              placeholder="Opcional"
-            />
-
-            <button className="submit-button" type="button" onClick={submitClosing}>
-              Enviar cierre
-            </button>
-          </>
-        )}
-
-        {action === "movimiento" && (
-          <>
-            <div className="panel-header">
-              <div>
-                <p className="eyebrow">Movimiento</p>
-                <h2>Movimiento de caja</h2>
-              </div>
-            </div>
-
-            <div className="form-grid">
-              <SelectField
-                label="Responsable"
-                value={movementPerson}
-                options={people}
-                onChange={setMovementPerson}
-              />
-              <SelectField
-                label="Turno"
-                value={movementShift}
-                options={shifts}
-                onChange={setMovementShift}
-              />
-              <SelectField
-                label="Tipo"
-                value={movementType}
-                options={["gasto", "retiro"]}
-                onChange={(value) => {
-                  setMovementType(value);
-                  setMovementDescription(value ? quickReasons[value][0] : "");
-                }}
-              />
-              <NumberField
-                label="Monto"
-                value={movementAmount}
-                onChange={setMovementAmount}
-              />
-              <NumberField
-                label="Efectivo actual en caja"
-                value={movementCashNow}
-                onChange={setMovementCashNow}
-              />
-            </div>
-
-            {movementType && (
-              <div className="quick-reasons">
-                {quickReasons[movementType].map((reason) => (
-                  <button
-                    className={movementDescription === reason ? "selected" : ""}
-                    key={reason}
-                    type="button"
-                    onClick={() => setMovementDescription(reason)}
-                  >
-                    {reason}
-                  </button>
-                ))}
-              </div>
+            {lastClosingId && (
+              <span className="record-pill">ID {lastClosingId.slice(0, 8)}</span>
             )}
+          </div>
 
+          <div className="form-grid">
+            <SelectField
+              label="Responsable"
+              value={closingPerson}
+              options={people}
+              onChange={setClosingPerson}
+            />
+            <SelectField
+              label="Turno"
+              value={closingShift}
+              options={shifts}
+              onChange={setClosingShift}
+            />
+            <NumberField
+              label="Ventas efectivo"
+              value={cashSales}
+              onChange={setCashSales}
+            />
+            <NumberField
+              label="Ventas tarjeta"
+              value={cardSales}
+              onChange={setCardSales}
+            />
+            <NumberField
+              label="Transferencias / otros"
+              value={transferSales}
+              onChange={setTransferSales}
+            />
+            <NumberField label="Uber Eats" value={uberSales} onChange={setUberSales} />
+            <NumberField
+              label="Dinero retirado"
+              value={withdrawnCash}
+              onChange={setWithdrawnCash}
+            />
             <TextField
-              label="Descripción o razón"
-              value={movementDescription}
-              onChange={setMovementDescription}
-              placeholder="Ej. Hielo, cierre parcial, proveedor"
+              label="Descripción del dinero retirado"
+              value={withdrawalDescription}
+              onChange={setWithdrawalDescription}
+              placeholder="Ej. entrega a manager, depósito, proveedor"
             />
+          </div>
 
-            {movementSuggestion > 0 && (
-              <div className="cash-alert">
-                <strong>Retiro sugerido: {money(movementSuggestion)}</strong>
-                <span>La caja quedaria en {money(BASE_CASH)}.</span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMovementType("retiro");
-                    setMovementDescription("Cierre parcial");
-                    setMovementAmount(movementSuggestion);
-                  }}
-                >
-                  Usar sugerencia
-                </button>
-              </div>
-            )}
+          <DenominationCounter counts={closingCounts} onChange={setClosingCounts} />
 
-            <TextAreaField
-              label="Observaciones"
-              value={movementNotes}
-              onChange={setMovementNotes}
-              placeholder="Opcional"
-            />
+          <div className="closing-result">
+            <TotalBox label="Caja esperada" value={money(expectedCash)} />
+            <TotalBox label="Caja contada" value={money(closingCounted)} />
+          </div>
 
-            <button className="submit-button" type="button" onClick={submitMovement}>
-              Enviar movimiento
-            </button>
-          </>
-        )}
+          <TextAreaField
+            label="Observaciones"
+            value={closingNotes}
+            onChange={setClosingNotes}
+            placeholder="Opcional"
+          />
 
-        {action === "admin" && (
-          <>
-            <div className="panel-header">
-              <div>
-                <p className="eyebrow">Admin David</p>
-                <h2>Corrección / Anulación</h2>
-              </div>
-            </div>
+          <button className="submit-button" disabled={isSubmitting} type="submit">
+            {isSubmitting ? "Enviando cierre" : "Enviar cierre"}
+          </button>
+        </form>
 
-            <div className="form-grid">
-              <SelectField
-                label="Acción"
-                value={adminAction}
-                options={["correccion", "anulacion"]}
-                onChange={setAdminAction}
-              />
+        <div className="annulment-zone">
+          {showAnnulment && (
+            <div className="annulment-fields">
               <label className="field">
-                <span>PIN David</span>
+                <span>PIN manager</span>
                 <input
                   type="password"
-                  value={adminPin}
-                  onChange={(event) => setAdminPin(event.target.value)}
+                  value={managerPin}
+                  onChange={(event) => setManagerPin(event.target.value)}
                 />
               </label>
+              <TextAreaField
+                label="Razón de anulación"
+                value={annulmentReason}
+                onChange={setAnnulmentReason}
+                placeholder="Ej. error de conteo o cierre duplicado"
+              />
             </div>
+          )}
 
-            <TextField
-              label="Registro o referencia"
-              value={adminReference}
-              onChange={setAdminReference}
-              placeholder="Ej. cierre Manana 4/8, folio o nota"
-            />
-            <TextAreaField
-              label="Razón"
-              value={adminReason}
-              onChange={setAdminReason}
-              placeholder="Explicar que se corrige o anula"
-            />
-
-            <button className="submit-button" type="button" onClick={submitAdmin}>
-              Enviar corrección / anulación
-            </button>
-          </>
-        )}
+          <button
+            className="danger-button"
+            disabled={isAnnuling}
+            type="button"
+            onClick={() => void handleAnnulment()}
+          >
+            {isAnnuling ? "Anulando" : "Anular"}
+          </button>
+        </div>
       </section>
     </main>
   );
