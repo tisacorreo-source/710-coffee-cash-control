@@ -134,3 +134,31 @@ Entre cuentas de Gmail personales la transferencia es directa. Si alguna de las
 dos es Workspace de otro dominio, Google no permite transferir propiedad: hay
 que hacer una copia del archivo desde la cuenta del cliente, volver a compartir
 con la cuenta de servicio y actualizar `GOOGLE_SHEETS_SPREADSHEET_ID` en Vercel.
+
+### Al transferir la propiedad, Google borra la cuenta de servicio
+
+Esto ya paso una vez y dejo la app caida con `403 PERMISSION_DENIED`.
+
+**En cuanto el nuevo dueño acepta la propiedad, Google elimina a la cuenta de
+servicio de la lista de accesos.** No importa que estuviera como Editor antes de
+la transferencia: desaparece. Los datos no se pierden, pero la app deja de leer
+y de escribir hasta que se restaure el permiso.
+
+Peor aun: el dueño anterior queda como Editor y **ya no puede volver a
+compartir** el archivo. Google le responde "No se puede compartir contenido en
+este momento". Solo el nuevo dueño puede reponer el permiso.
+
+Procedimiento correcto, en este orden:
+
+1. Transferir la propiedad y esperar a que el cliente acepte.
+2. **Desde la cuenta del nuevo dueño**, volver a agregar
+   `id-10-coffee-cash-control@coffee-cash-control.iam.gserviceaccount.com`
+   como Editor del Sheet.
+3. Verificar con `curl https://<app>/api/caja` que responda `"mode": "sheets"`.
+   Si responde `403` o `{"message": ...}`, el permiso no quedo.
+
+Google tambien marca el archivo transferido como **spam** en el Drive del nuevo
+dueño. Hay que abrirlo y pulsar "No es spam" para que no acabe borrado.
+
+La carpeta de Drive no afecta a la app: `GOOGLE_DRIVE_FOLDER_ID` esta vacio y el
+codigo no la usa. Solo el Sheet es critico.
