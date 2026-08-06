@@ -10,7 +10,6 @@ test("cash-control prototype separates closing and withdrawals", async () => {
   assert.match(page, /Dinero retirado/);
   assert.match(page, /Monto retirado/);
   assert.match(page, /Saldo anterior/);
-  assert.match(page, /Caja esperada/);
   assert.match(page, /Corte de caja pendiente/);
   assert.match(page, /Cierre enviado/);
   assert.match(page, /Dinero retirado enviado/);
@@ -20,10 +19,14 @@ test("cash-control prototype separates closing and withdrawals", async () => {
   assert.doesNotMatch(page, /Corrección \/ Anulación/);
   assert.doesNotMatch(page, /Anular/);
   assert.doesNotMatch(page, /Descripción del dinero retirado/);
-  assert.match(page, /Caja contada/);
+  // El conteo fisico debe seguir en el formulario; el cuadre se muestra en el
+  // dashboard, no aqui, para no cargar al turno con esa lectura.
+  assert.match(page, /Conteo de caja/);
   assert.match(page, /Billetes Q200/);
   assert.match(page, /Monedas menores/);
-  assert.match(page, /Diferencia/);
+  // El total sale del conteo, no de la suma de ventas: "Caja esperada" ya no
+  // se muestra al turno.
+  assert.doesNotMatch(page, /Caja esperada/);
   assert.doesNotMatch(page, /registrado en modo local/);
   assert.doesNotMatch(page, /enviado a Sheets/);
   assert.doesNotMatch(page, /retiro sugerido/i);

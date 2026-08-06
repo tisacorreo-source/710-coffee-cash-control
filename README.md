@@ -113,9 +113,18 @@ mas un monto suelto de monedas menores). De ahi salen `caja_contada` y
 diferencia = caja_contada - caja_esperada
 ```
 
-Positivo = sobra dinero en el cajon; negativo = falta. El dashboard lo usa para
-el estado "cuadrada / sobra / falta", para la alerta de cierres con diferencia y
-para la columna de cada cierre.
+Positivo = sobra dinero en el cajon; negativo = falta.
+
+**La diferencia solo se muestra en el dashboard, no en el formulario.** El turno
+ve unicamente dos cifras al cerrar: saldo anterior y total. El total ES la caja
+contada: el fondo operativo vive dentro del cajon, asi que lo contado ya lo
+incluye y sumarle el saldo anterior lo duplicaria.
+
+Las ventas capturadas (efectivo, tarjeta, transferencias, Uber) **no alimentan
+ese total**; son informativas para el turno. El servidor si las usa para calcular
+`caja_esperada`, que es contra lo que el dashboard compara. Consecuencia a tener
+presente: una venta mal capturada produce una diferencia en el dashboard que no
+es dinero perdido sino un error de captura.
 
 **No volver a quitarlo sin pensarlo dos veces.** Ya se quito una vez (commit
 `b8c7a3e`, agosto 2026) y durante ese periodo la app registraba lo que el
