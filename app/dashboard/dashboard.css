@@ -778,6 +778,66 @@ a.dash-alert:hover .dash-alert-title {
   font-weight: 600;
 }
 
+/* ---------- estado de caja ---------- */
+
+.dash-status {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  margin-top: 14px;
+  padding: 11px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+}
+
+.dash-status svg {
+  margin-top: 1px;
+}
+
+.dash-status strong {
+  display: block;
+  font-size: 14px;
+}
+
+.dash-status small {
+  display: block;
+  margin-top: 2px;
+  color: var(--ink-2);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.dash-status.is-cuadrada {
+  background: var(--accent-soft);
+  color: var(--good-ink);
+}
+
+.dash-status.is-sobra {
+  background: #fdf3e0;
+  color: var(--warning-ink);
+}
+
+.dash-status.is-falta {
+  background: #fdeeee;
+  color: var(--critical-ink);
+}
+
+.dash-figure.is-sobra strong,
+.dash-detail-row.is-sobra dd {
+  color: var(--warning-ink);
+}
+
+.dash-figure.is-falta strong,
+.dash-detail-row.is-falta dd {
+  color: var(--critical-ink);
+}
+
+.dash-figure.is-cuadrada strong,
+.dash-detail-row.is-cuadrada dd {
+  color: var(--good-ink);
+}
+
 /* ---------- nota de dato no disponible ---------- */
 
 .dash-unavailable {
@@ -1078,8 +1138,9 @@ a.dash-alert:hover .dash-alert-title {
     margin-bottom: 0;
   }
 
+  /* Seis cifras por cierre: 3x2 en vez de 4+2 con fila coja. */
   .dash-figures {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 

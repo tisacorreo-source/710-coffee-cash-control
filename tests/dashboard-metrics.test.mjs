@@ -8,6 +8,8 @@ const {
   buildDailySeries,
   buildMovements,
   buildSales,
+  cashStatus,
+  closingDifference,
   closingsInRange,
   dayKey,
   daysInRange,
@@ -222,4 +224,59 @@ test("shiftClass no reconoce un turno de noche", () => {
   assert.equal(shiftClass("Manana"), "is-manana");
   assert.equal(shiftClass("Tarde"), "is-tarde");
   assert.equal(shiftClass("Noche"), "");
+});
+
+test("closingDifference distingue sobrante de faltante", () => {
+  // Positivo = sobra dinero en el cajon.
+  assert.equal(
+    closingDifference(closing({ expectedCash: 1600, countedCash: 1720 })),
+    120,
+  );
+  // Negativo = falta dinero.
+  assert.equal(
+    closingDifference(closing({ expectedCash: 1600, countedCash: 1450 })),
+    -150,
+  );
+  assert.equal(
+    closingDifference(closing({ expectedCash: 1600, countedCash: 1600 })),
+    0,
+  );
+});
+
+test("cashStatus nombra los tres estados de caja", () => {
+  assert.equal(cashStatus(0), "cuadrada");
+  assert.equal(cashStatus(120), "sobra");
+  assert.equal(cashStatus(-150), "falta");
+});
+
+test("buildAlerts avisa de cierres con diferencia y suma el neto", () => {
+  const config = { baseCash: 1000, cashLimit: 4000, standardWithdrawal: 3000 };
+  const alerts = buildAlerts({
+    cashBalance: 2500,
+    config,
+    closings: [
+      closing({ recordId: "a", expectedCash: 1600, countedCash: 1720, notes: "" }),
+      closing({ recordId: "b", expectedCash: 1600, countedCash: 1550, notes: "" }),
+      closing({ recordId: "c", expectedCash: 1600, countedCash: 1600, notes: "" }),
+    ],
+    cancellations: [],
+  });
+
+  const diff = alerts.find((alert) => alert.id === "diferencias");
+  assert.ok(diff, "deberia existir la alerta de diferencias");
+  assert.match(diff.title, /2 cierres/);
+  // +120 y -50 se compensan parcialmente: neto +70.
+  assert.match(diff.detail, /Q70\.00/);
+});
+
+test("buildAlerts no reporta diferencia cuando todos los cierres cuadran", () => {
+  const config = { baseCash: 1000, cashLimit: 4000, standardWithdrawal: 3000 };
+  const alerts = buildAlerts({
+    cashBalance: 2500,
+    config,
+    closings: [closing({ expectedCash: 1600, countedCash: 1600, notes: "" })],
+    cancellations: [],
+  });
+
+  assert.equal(alerts.some((alert) => alert.id === "diferencias"), false);
 });

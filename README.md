@@ -103,16 +103,30 @@ Detalles de implementacion:
 - Los umbrales (`base_cash`, `cash_limit`, `standard_withdrawal`) se leen de la
   pestaña `estado_caja`, con los valores del codigo como respaldo.
 
+### Conteo de caja y diferencia
+
+El cierre pide el **conteo fisico del efectivo** por denominaciones (Q200 a Q1
+mas un monto suelto de monedas menores). De ahi salen `caja_contada` y
+`denominaciones_json`, y con eso la diferencia es un dato real:
+
+```
+diferencia = caja_contada - caja_esperada
+```
+
+Positivo = sobra dinero en el cajon; negativo = falta. El dashboard lo usa para
+el estado "cuadrada / sobra / falta", para la alerta de cierres con diferencia y
+para la columna de cada cierre.
+
+**No volver a quitarlo sin pensarlo dos veces.** Ya se quito una vez (commit
+`b8c7a3e`, agosto 2026) y durante ese periodo la app registraba lo que el
+sistema suponia que debia haber, sin que nadie verificara el cajon: era
+imposible detectar un faltante. Hay tests en `tests/rendered-html.test.mjs` que
+fallan si el conteo desaparece del formulario o de la API.
+
 ### Datos que el dashboard no puede mostrar
 
-El formulario de cierre no pide el efectivo contado fisicamente: el backend
-guarda `caja_contada = caja_esperada` y `denominaciones_json = {}`. Por eso el
-dashboard **no** muestra diferencia de caja ni estado "cuadrada / sobra /
-falta", y lo declara explicitamente como dato no disponible en pantalla. Para
-habilitarlo hay que volver a pedir el conteo en la app de cierre.
-
-Lo mismo con `anulaciones`: la pestaña existe y el dashboard ya la lee, pero
-ninguna parte de la app escribe en ella todavia.
+`anulaciones`: la pestaña existe y el dashboard ya la lee, pero ninguna parte de
+la app escribe en ella todavia.
 
 ## Traspaso de la cuenta de Google al cliente
 

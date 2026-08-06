@@ -4,6 +4,9 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 
 import {
+  CASH_STATUS_LABELS,
+  cashStatus,
+  closingDifference,
   closingTotal,
   closingsInRange,
   formatTime,
@@ -16,7 +19,6 @@ import {
   LoadingScreen,
   PeriodPicker,
   ScreenHeader,
-  Unavailable,
   initials,
   shiftClass,
   shiftLabel,
@@ -116,17 +118,23 @@ export default function CierresPage() {
                       <span>Caja esperada</span>
                       <strong>{money(closing.expectedCash)}</strong>
                     </div>
+                    <div className="dash-figure">
+                      <span>Caja contada</span>
+                      <strong>{money(closing.countedCash)}</strong>
+                    </div>
+                    <div
+                      className={`dash-figure is-${cashStatus(closingDifference(closing))}`}
+                    >
+                      <span>{CASH_STATUS_LABELS[cashStatus(closingDifference(closing))]}</span>
+                      <strong>
+                        {closingDifference(closing) > 0 ? "+" : ""}
+                        {money(closingDifference(closing))}
+                      </strong>
+                    </div>
                   </div>
                 </Link>
               ))}
 
-              <Card>
-                <Unavailable title="Sin columna de diferencia">
-                  El listado no muestra caja contada ni diferencia porque la app de
-                  cierre no registra el conteo físico: la caja contada se guarda igual
-                  a la esperada. Requerimiento futuro.
-                </Unavailable>
-              </Card>
             </>
           ) : (
             <Card>

@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import {
   buildDailySeries,
   buildSales,
+  closingDifference,
   closingsInRange,
   deltaLabel,
   formatLongDate,
@@ -44,6 +45,13 @@ export default function ReportesPage() {
       sales,
       previousTotal: previous.total,
       closingsCount: closings.length,
+      withDifference: closings.filter(
+        (closing) => closingDifference(closing) !== 0,
+      ).length,
+      netDifference: closings.reduce(
+        (total, closing) => total + closingDifference(closing),
+        0,
+      ),
       series: buildDailySeries(closings, range),
       withdrawalsTotal: withdrawals.reduce((total, item) => total + item.amount, 0),
       withdrawalsCount: withdrawals.length,
@@ -127,12 +135,21 @@ export default function ReportesPage() {
                 <dt>Retiro estándar configurado</dt>
                 <dd>{money(snapshot.config.standardWithdrawal)}</dd>
               </div>
+              <div className="dash-detail-row">
+                <dt>Cierres con diferencia</dt>
+                <dd>
+                  {view.withDifference} de {view.closingsCount}
+                </dd>
+              </div>
+              <div className="dash-detail-row">
+                <dt>Diferencia neta del periodo</dt>
+                <dd>
+                  {view.netDifference > 0 ? "+" : ""}
+                  {money(view.netDifference)}
+                </dd>
+              </div>
             </dl>
 
-            <Unavailable title="Diferencias de caja: dato no disponible">
-              No se puede reportar cuántos cierres tuvieron diferencia porque el
-              conteo físico de efectivo no se registra. Requerimiento futuro.
-            </Unavailable>
           </Card>
 
           <Card title="Configuración de caja">

@@ -285,6 +285,28 @@ export function cancellationsInRange(
   return cancellations.filter((item) => inRange(item.createdAt, range));
 }
 
+/**
+ * Positivo = sobra dinero en el cajon; negativo = falta. Solo es un dato real
+ * desde que la app de cierre volvio a pedir el conteo fisico: en los registros
+ * anteriores caja contada se guardaba igual a la esperada y esto daba siempre 0.
+ */
+export function closingDifference(closing: ClosingRecord): number {
+  return closing.countedCash - closing.expectedCash;
+}
+
+export type CashStatus = "cuadrada" | "sobra" | "falta";
+
+export function cashStatus(difference: number): CashStatus {
+  if (difference === 0) return "cuadrada";
+  return difference > 0 ? "sobra" : "falta";
+}
+
+export const CASH_STATUS_LABELS: Record<CashStatus, string> = {
+  cuadrada: "Caja cuadrada",
+  sobra: "Sobra dinero",
+  falta: "Falta dinero",
+};
+
 export function closingTotal(closing: ClosingRecord): number {
   return (
     closing.cashSales +
@@ -484,6 +506,28 @@ export function buildAlerts({
           : `${cancellations.length} anulaciones en el periodo`,
       detail: "Revisa la trazabilidad de los registros anulados.",
       href: null,
+    });
+  }
+
+  const withDifference = closings.filter(
+    (closing) => closingDifference(closing) !== 0,
+  );
+
+  if (withDifference.length > 0) {
+    const net = withDifference.reduce(
+      (total, closing) => total + closingDifference(closing),
+      0,
+    );
+
+    alerts.push({
+      id: "diferencias",
+      severity: "warning",
+      title:
+        withDifference.length === 1
+          ? "1 cierre con diferencia de caja"
+          : `${withDifference.length} cierres con diferencia de caja`,
+      detail: `Neto del periodo: ${money(net)}. Revisa el detalle de cada cierre.`,
+      href: "/dashboard/cierres",
     });
   }
 

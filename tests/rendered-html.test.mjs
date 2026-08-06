@@ -20,9 +20,10 @@ test("cash-control prototype separates closing and withdrawals", async () => {
   assert.doesNotMatch(page, /Corrección \/ Anulación/);
   assert.doesNotMatch(page, /Anular/);
   assert.doesNotMatch(page, /Descripción del dinero retirado/);
-  assert.doesNotMatch(page, /Caja contada/);
-  assert.doesNotMatch(page, /Billetes Q/);
-  assert.doesNotMatch(page, /Monedas/);
+  assert.match(page, /Caja contada/);
+  assert.match(page, /Billetes Q200/);
+  assert.match(page, /Monedas menores/);
+  assert.match(page, /Diferencia/);
   assert.doesNotMatch(page, /registrado en modo local/);
   assert.doesNotMatch(page, /enviado a Sheets/);
   assert.doesNotMatch(page, /retiro sugerido/i);
@@ -48,8 +49,11 @@ test("backend exposes separate cash state and withdrawal routes", async () => {
 
   assert.match(cashRoute, /getCashState/);
   assert.match(withdrawalRoute, /appendWithdrawalRecord/);
-  assert.doesNotMatch(closingRoute, /body\.countedCash/);
-  assert.doesNotMatch(closingRoute, /cleanDenominations/);
+  // El conteo fisico es lo unico que permite detectar un faltante de caja:
+  // si vuelve a desaparecer, estos asserts lo avisan.
+  assert.match(closingRoute, /body\.countedCash/);
+  assert.match(closingRoute, /cleanDenominations/);
+  assert.doesNotMatch(closingRoute, /countedCash: expectedCash/);
   assert.match(workspace, /GOOGLE_SHEETS_WITHDRAWALS_SHEET/);
   assert.match(workspace, /GOOGLE_SERVICE_ACCOUNT_JSON/);
   assert.match(workspace, /STANDARD_WITHDRAWAL = 3000/);

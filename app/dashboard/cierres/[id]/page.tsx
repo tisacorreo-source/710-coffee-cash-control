@@ -4,7 +4,10 @@ import Link from "next/link";
 import { use, useMemo } from "react";
 
 import {
+  CASH_STATUS_LABELS,
   METHOD_COLORS,
+  cashStatus,
+  closingDifference,
   closingTotal,
   formatLongDate,
   formatTime,
@@ -17,7 +20,6 @@ import {
   IconArrowLeft,
   LoadingScreen,
   ScreenHeader,
-  Unavailable,
   initials,
   shiftClass,
   shiftLabel,
@@ -181,13 +183,16 @@ export default function DetalleCierrePage({
                 <dt>Caja contada</dt>
                 <dd>{money(closing.countedCash)}</dd>
               </div>
+              <div
+                className={`dash-detail-row is-total is-${cashStatus(closingDifference(closing))}`}
+              >
+                <dt>{CASH_STATUS_LABELS[cashStatus(closingDifference(closing))]}</dt>
+                <dd>
+                  {closingDifference(closing) > 0 ? "+" : ""}
+                  {money(closingDifference(closing))}
+                </dd>
+              </div>
             </dl>
-
-            <Unavailable title="La diferencia no es un dato real">
-              La caja contada se guarda igual a la esperada porque el formulario de
-              cierre no pide el conteo físico. Mientras siga así, la diferencia
-              siempre será Q0.00. Requerimiento futuro.
-            </Unavailable>
           </Card>
 
           <Card title="Denominaciones del efectivo contado">
