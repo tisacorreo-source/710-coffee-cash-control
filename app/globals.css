@@ -277,57 +277,6 @@ h2 {
   font-size: 14px;
 }
 
-.difference-box {
-  display: grid;
-  gap: 3px;
-  margin: 16px 0;
-  padding: 13px 15px;
-  border: 1px solid var(--line);
-  border-left: 5px solid var(--muted);
-  border-radius: 8px;
-  background: var(--surface-muted);
-}
-
-.difference-box span {
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 800;
-}
-
-.difference-box strong {
-  font-size: 24px;
-  letter-spacing: -0.02em;
-}
-
-.difference-box small {
-  color: var(--muted);
-  font-size: 13px;
-}
-
-.difference-box.is-balanced {
-  border-left-color: #0d7a45;
-}
-
-.difference-box.is-balanced strong {
-  color: #0d7a45;
-}
-
-.difference-box.is-over {
-  border-left-color: #8a5a00;
-}
-
-.difference-box.is-over strong {
-  color: #8a5a00;
-}
-
-.difference-box.is-short {
-  border-left-color: var(--red);
-  background: var(--red-soft);
-}
-
-.difference-box.is-short strong {
-  color: var(--red);
-}
 
 .closing-result {
   display: grid;

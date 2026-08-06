@@ -343,11 +343,11 @@ export default function Home() {
   const [isSubmittingClosing, setIsSubmittingClosing] = useState(false);
   const [isSubmittingWithdrawal, setIsSubmittingWithdrawal] = useState(false);
 
-  const expectedCash = cashState.currentBalance + numeric(cashSales);
+  // El total de caja sale del conteo fisico, no de las ventas capturadas: el
+  // fondo operativo vive dentro del cajon, asi que lo contado YA lo incluye y
+  // sumarle el saldo anterior lo duplicaria.
   const countedCash = cashTotal(closingCounts);
-  // Positivo = sobra dinero en el cajon; negativo = falta.
-  const cashDifference = countedCash - expectedCash;
-  const needsCut = expectedCash > cashState.cashLimit;
+  const needsCut = countedCash > cashState.cashLimit;
 
   function clearStatusTimer() {
     if (statusTimerRef.current) {
@@ -635,31 +635,7 @@ export default function Home() {
 
             <div className="closing-result">
               <TotalBox label="Saldo anterior" value={money(cashState.currentBalance)} />
-              <TotalBox label="Caja esperada" value={money(expectedCash)} />
-              <TotalBox label="Caja contada" value={money(countedCash)} />
-            </div>
-
-            <div
-              className={`difference-box ${
-                cashDifference === 0
-                  ? "is-balanced"
-                  : cashDifference > 0
-                    ? "is-over"
-                    : "is-short"
-              }`}
-            >
-              <span>Diferencia</span>
-              <strong>
-                {cashDifference > 0 ? "+" : ""}
-                {money(cashDifference)}
-              </strong>
-              <small>
-                {cashDifference === 0
-                  ? "Caja cuadrada"
-                  : cashDifference > 0
-                    ? "Sobra dinero en el cajon"
-                    : "Falta dinero en el cajon"}
-              </small>
+              <TotalBox label="Total" value={money(countedCash)} />
             </div>
 
             {needsCut && (
