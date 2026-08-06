@@ -39,6 +39,32 @@ export type WithdrawalRecord = {
   description: string;
 };
 
+export type CancellationRecord = {
+  cancellationId: string;
+  createdAt: string;
+  targetType: string;
+  targetId: string;
+  person: string;
+  reason: string;
+};
+
+export type CashConfig = {
+  baseCash: number;
+  cashLimit: number;
+  standardWithdrawal: number;
+};
+
+export type DashboardSnapshot = {
+  generatedAt: string;
+  mode: CashMode;
+  config: CashConfig;
+  closings: ClosingRecord[];
+  withdrawals: WithdrawalRecord[];
+  cancellations: CancellationRecord[];
+  cashBalance: number;
+  lastClosingAt: string | null;
+};
+
 type WorkspaceResult = {
   persisted: boolean;
   mode: CashMode;
@@ -79,6 +105,16 @@ const WITHDRAWAL_HEADERS = [
   "descripcion",
 ];
 
+// estado_caja y anulaciones no llevan constante de encabezados: solo se leen,
+// nunca se crean ni se reparan desde el codigo. El orden de columnas esperado
+// esta en cashConfigFromRows y cancellationRecordsFromRows.
+
+const DEFAULT_CASH_CONFIG: CashConfig = {
+  baseCash: BASE_CASH,
+  cashLimit: CASH_LIMIT,
+  standardWithdrawal: STANDARD_WITHDRAWAL,
+};
+
 let cachedAccessToken: { token: string; expiresAt: number } | null = null;
 
 function localStore() {
@@ -109,6 +145,9 @@ function googleConfig() {
     spreadsheetId: process.env.GOOGLE_SHEETS_SPREADSHEET_ID || "",
     closingsSheet: process.env.GOOGLE_SHEETS_CLOSINGS_SHEET || "cierres",
     withdrawalsSheet: process.env.GOOGLE_SHEETS_WITHDRAWALS_SHEET || "retiros",
+    configSheet: process.env.GOOGLE_SHEETS_CONFIG_SHEET || "estado_caja",
+    cancellationsSheet:
+      process.env.GOOGLE_SHEETS_CANCELLATIONS_SHEET || "anulaciones",
     driveFolderId: process.env.GOOGLE_DRIVE_FOLDER_ID || "",
   };
 }
@@ -297,16 +336,33 @@ async function appendRow(sheetName: string, headers: string[], values: unknown[]
 }
 
 async function readRows(sheetName: string, headers: string[]) {
-  const config = googleConfig();
   await ensureHeaderRow(sheetName, headers);
+  return readRowsOnly(sheetName);
+}
 
-  const response = await googleFetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/${encodeURIComponent(
-      sheetRange(sheetName, "A2:Z"),
-    )}?valueRenderOption=UNFORMATTED_VALUE`,
-  );
-  const data = (await response.json()) as { values?: unknown[][] };
-  return data.values || [];
+/**
+ * Lectura estrictamente pasiva: no crea la hoja ni escribe encabezados. La usa
+ * el dashboard, que es de solo consulta y no debe tocar la hoja ni siquiera
+ * para "arreglarla". Si la pestaña no existe devuelve vacio en lugar de fallar.
+ */
+async function readRowsOnly(sheetName: string) {
+  const config = googleConfig();
+
+  try {
+    const response = await googleFetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/${encodeURIComponent(
+        sheetRange(sheetName, "A2:Z"),
+      )}?valueRenderOption=UNFORMATTED_VALUE`,
+    );
+    const data = (await response.json()) as { values?: unknown[][] };
+    return data.values || [];
+  } catch (error) {
+    console.warn(
+      `No se pudo leer la hoja ${sheetName}.`,
+      error instanceof Error ? error.message : error,
+    );
+    return [];
+  }
 }
 
 async function writeDriveAuditFile(kind: string, payload: unknown) {
@@ -417,30 +473,48 @@ function parseTime(value: unknown) {
   return Number.isFinite(timestamp) ? timestamp : 0;
 }
 
-function cashStateFromRecords(
+function balanceFromRecords(
   closings: ClosingRecord[],
   withdrawals: WithdrawalRecord[],
-  mode: CashMode,
-): CashState {
+  config: CashConfig,
+) {
   const sortedClosings = [...closings].sort(
     (a, b) => parseTime(a.createdAt) - parseTime(b.createdAt),
   );
   const lastClosing = sortedClosings.at(-1) || null;
   const lastClosingTime = parseTime(lastClosing?.createdAt || null);
-  const baseBalance = lastClosing?.countedCash ?? BASE_CASH;
+  const baseBalance = lastClosing?.countedCash ?? config.baseCash;
   const withdrawalsSinceLastClosing = withdrawals
     .filter((withdrawal) => parseTime(withdrawal.createdAt) > lastClosingTime)
     .reduce((total, withdrawal) => total + withdrawal.amount, 0);
 
   return {
-    baseCash: BASE_CASH,
-    cashLimit: CASH_LIMIT,
-    currentBalance: Math.max(baseBalance - withdrawalsSinceLastClosing, 0),
+    lastClosing,
+    withdrawalsSinceLastClosing,
+    // Sin recorte a cero: un saldo negativo es una incidencia que el dashboard
+    // debe poder mostrar, no un dato que se deba esconder.
+    rawBalance: baseBalance - withdrawalsSinceLastClosing,
+  };
+}
+
+function cashStateFromRecords(
+  closings: ClosingRecord[],
+  withdrawals: WithdrawalRecord[],
+  mode: CashMode,
+  config: CashConfig = DEFAULT_CASH_CONFIG,
+): CashState {
+  const { lastClosing, withdrawalsSinceLastClosing, rawBalance } =
+    balanceFromRecords(closings, withdrawals, config);
+
+  return {
+    baseCash: config.baseCash,
+    cashLimit: config.cashLimit,
+    currentBalance: Math.max(rawBalance, 0),
     lastClosingAt: lastClosing?.createdAt || null,
     lastClosingId: lastClosing?.recordId || null,
     mode,
     persisted: mode === "sheets",
-    standardWithdrawal: STANDARD_WITHDRAWAL,
+    standardWithdrawal: config.standardWithdrawal,
     withdrawalsSinceLastClosing,
   };
 }
@@ -494,6 +568,58 @@ function withdrawalRecordsFromRows(rows: unknown[][]): WithdrawalRecord[] {
     }));
 }
 
+function cancellationRecordsFromRows(rows: unknown[][]): CancellationRecord[] {
+  return rows
+    .filter((row) => row[0] && row[1])
+    .map((row) => ({
+      cancellationId: safeText(row[0]),
+      createdAt: safeText(row[1]),
+      targetType: safeText(row[2]),
+      targetId: safeText(row[3]),
+      person: safeText(row[4]),
+      reason: safeText(row[5]),
+    }));
+}
+
+function cashConfigFromRows(rows: unknown[][]): CashConfig {
+  const values = new Map<string, number>();
+
+  for (const row of rows) {
+    const key = safeText(row[0]).trim();
+    if (key) {
+      values.set(key, parseAmount(row[1]));
+    }
+  }
+
+  const pick = (key: string, fallback: number) => {
+    const value = values.get(key);
+    return value !== undefined && value > 0 ? value : fallback;
+  };
+
+  return {
+    baseCash: pick("base_cash", DEFAULT_CASH_CONFIG.baseCash),
+    cashLimit: pick("cash_limit", DEFAULT_CASH_CONFIG.cashLimit),
+    standardWithdrawal: pick(
+      "standard_withdrawal",
+      DEFAULT_CASH_CONFIG.standardWithdrawal,
+    ),
+  };
+}
+
+async function readCashConfig(): Promise<CashConfig> {
+  const config = googleConfig();
+
+  try {
+    return cashConfigFromRows(await readRowsOnly(config.configSheet));
+  } catch (error) {
+    console.warn(
+      "No se pudo leer estado_caja; se usan los valores por defecto.",
+      error instanceof Error ? error.message : error,
+    );
+    return DEFAULT_CASH_CONFIG;
+  }
+}
+
 export async function getCashState(): Promise<CashState> {
   if (!isWorkspaceConfigured()) {
     const store = localStore();
@@ -501,16 +627,69 @@ export async function getCashState(): Promise<CashState> {
   }
 
   const config = googleConfig();
-  const [closingRows, withdrawalRows] = await Promise.all([
+  const [closingRows, withdrawalRows, cashConfig] = await Promise.all([
     readRows(config.closingsSheet, CLOSING_HEADERS),
     readRows(config.withdrawalsSheet, WITHDRAWAL_HEADERS),
+    readCashConfig(),
   ]);
 
   return cashStateFromRecords(
     closingRecordsFromRows(closingRows),
     withdrawalRecordsFromRows(withdrawalRows),
     "sheets",
+    cashConfig,
   );
+}
+
+export async function getDashboardSnapshot(): Promise<DashboardSnapshot> {
+  if (!isWorkspaceConfigured()) {
+    const store = localStore();
+    const { lastClosing, rawBalance } = balanceFromRecords(
+      store.closings,
+      store.withdrawals,
+      DEFAULT_CASH_CONFIG,
+    );
+
+    return {
+      generatedAt: new Date().toISOString(),
+      mode: "local",
+      config: DEFAULT_CASH_CONFIG,
+      closings: store.closings,
+      withdrawals: store.withdrawals,
+      cancellations: [],
+      cashBalance: rawBalance,
+      lastClosingAt: lastClosing?.createdAt || null,
+    };
+  }
+
+  const config = googleConfig();
+  // Solo lecturas pasivas: el dashboard nunca modifica la hoja.
+  const [closingRows, withdrawalRows, cancellationRows, cashConfig] =
+    await Promise.all([
+      readRowsOnly(config.closingsSheet),
+      readRowsOnly(config.withdrawalsSheet),
+      readRowsOnly(config.cancellationsSheet),
+      readCashConfig(),
+    ]);
+
+  const closings = closingRecordsFromRows(closingRows);
+  const withdrawals = withdrawalRecordsFromRows(withdrawalRows);
+  const { lastClosing, rawBalance } = balanceFromRecords(
+    closings,
+    withdrawals,
+    cashConfig,
+  );
+
+  return {
+    generatedAt: new Date().toISOString(),
+    mode: "sheets",
+    config: cashConfig,
+    closings,
+    withdrawals,
+    cancellations: cancellationRecordsFromRows(cancellationRows),
+    cashBalance: rawBalance,
+    lastClosingAt: lastClosing?.createdAt || null,
+  };
 }
 
 export async function appendClosingRecord(

@@ -65,3 +65,38 @@ test("metadata is branded for the cash-control preview", async () => {
   assert.match(layout, /710 Coffee Bar - Caja de turno/);
   assert.match(layout, /registrar cierres y dinero retirado/);
 });
+
+test("no existe turno de noche en ninguna capa de la app", async () => {
+  const files = [
+    "../lib/shifts.ts",
+    "../app/page.tsx",
+    "../app/dashboard/components.tsx",
+    "../app/dashboard/dashboard.css",
+    "../app/dashboard/cierres/page.tsx",
+    "../app/dashboard/cierres/[id]/page.tsx",
+  ];
+
+  // Se buscan las formas en que un turno de noche podria volver a colarse: un
+  // valor literal, una clase de estilo o una coincidencia por prefijo. Las
+  // menciones en prosa estan permitidas: documentan justamente que no existe.
+  const leaks = [/["'`]Noche["'`]/, /is-noche/, /startsWith\(\s*["'`]noc/i];
+
+  for (const file of files) {
+    const source = await readFile(new URL(file, import.meta.url), "utf8");
+
+    for (const pattern of leaks) {
+      assert.doesNotMatch(
+        source,
+        pattern,
+        `${file} reintrodujo un turno de noche (${pattern}) que no existe en el negocio`,
+      );
+    }
+  }
+});
+
+test("la app de cierre toma los turnos de la fuente unica", async () => {
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+
+  assert.match(page, /from "@\/lib\/shifts"/);
+  assert.doesNotMatch(page, /const shifts: Shift\[\] = \[/);
+});

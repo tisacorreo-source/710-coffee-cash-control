@@ -3,9 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
+import { SHIFTS, shiftLabel, type Shift } from "@/lib/shifts";
+
 type View = "cierre" | "retiro";
 type Person = "Veronica" | "Rodrigo" | "David" | "Chisco";
-type Shift = "Manana" | "Tarde";
 type SelectValue<T extends string> = T | "";
 type NumberValue = number | "";
 
@@ -22,7 +23,8 @@ type CashState = {
 };
 
 const people: Person[] = ["Veronica", "Rodrigo", "David", "Chisco"];
-const shifts: Shift[] = ["Manana", "Tarde"];
+// Solo manana y tarde: el negocio no tiene turno de noche. Ver lib/shifts.ts.
+const shifts: readonly Shift[] = SHIFTS;
 const SUCCESS_MESSAGE_DURATION_MS = 2200;
 
 const defaultCashState: CashState = {
@@ -58,12 +60,15 @@ function SelectField<T extends string>({
   options,
   onChange,
   placeholder = "Seleccionar",
+  labelFor,
 }: {
   label: string;
   value: SelectValue<T>;
-  options: T[];
+  options: readonly T[];
   onChange: (value: SelectValue<T>) => void;
   placeholder?: string;
+  /** Texto a mostrar cuando difiere del valor que se guarda en Sheets. */
+  labelFor?: (option: T) => string;
 }) {
   return (
     <label className="field">
@@ -76,7 +81,7 @@ function SelectField<T extends string>({
         <option value="">{placeholder}</option>
         {options.map((option) => (
           <option key={option} value={option}>
-            {option}
+            {labelFor ? labelFor(option) : option}
           </option>
         ))}
       </select>
@@ -456,6 +461,7 @@ export default function Home() {
                 value={closingShift}
                 options={shifts}
                 onChange={setClosingShift}
+                labelFor={shiftLabel}
               />
               <NumberField
                 label="Ventas efectivo"
@@ -539,6 +545,7 @@ export default function Home() {
                 value={withdrawalShift}
                 options={shifts}
                 onChange={setWithdrawalShift}
+                labelFor={shiftLabel}
               />
               <NumberField
                 label="Monto retirado"
