@@ -251,16 +251,28 @@ export function KpiTile({
   foot,
   tone = "neutral",
   accent = false,
+  swatch,
 }: {
   label: string;
   value: string;
   foot?: string | null;
   tone?: "neutral" | "up" | "down";
   accent?: boolean;
+  /** Color de la porcion equivalente en la dona, para que se lean como lo mismo. */
+  swatch?: string;
 }) {
   return (
     <div className="dash-kpi">
-      <p className="dash-kpi-label">{label}</p>
+      <p className="dash-kpi-label">
+        {swatch && (
+          <span
+            className="dash-swatch"
+            style={{ background: swatch }}
+            aria-hidden="true"
+          />
+        )}
+        {label}
+      </p>
       <strong className={`dash-kpi-value${accent ? " is-accent" : ""}`}>{value}</strong>
       {foot && (
         <p
@@ -391,9 +403,16 @@ export function MethodDonut({
 export function MethodLegend({
   slices,
   compact = false,
+  showAmounts = true,
 }: {
   slices: MethodSlice[];
   compact?: boolean;
+  /**
+   * En el Resumen los montos ya viven en las tarjetas de arriba, asi que la
+   * leyenda se queda solo con la proporcion y no repite el mismo numero dos
+   * veces en pantalla. En Reportes la leyenda ES el desglose y si los necesita.
+   */
+  showAmounts?: boolean;
 }) {
   return (
     <ul className="dash-legend">
@@ -404,8 +423,14 @@ export function MethodLegend({
             {compact ? slice.shortLabel : slice.label}
           </span>
           <span className="dash-legend-value">
-            {money(slice.amount)}
-            <span>{percent(slice.share)}</span>
+            {showAmounts ? (
+              <>
+                {money(slice.amount)}
+                <span>{percent(slice.share)}</span>
+              </>
+            ) : (
+              percent(slice.share)
+            )}
           </span>
         </li>
       ))}

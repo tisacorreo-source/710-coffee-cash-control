@@ -12,6 +12,7 @@ import {
   deltaLabel,
   formatTime,
   money,
+  percent,
   previousRange,
   withdrawalsInRange,
   type Alert,
@@ -115,16 +116,23 @@ export default function ResumenPage() {
                   : "neutral"
               }
             />
-            <KpiTile
-              label="Efectivo"
-              value={money(view.sales.cash)}
-              foot="Ventas cobradas en efectivo"
-            />
-            <KpiTile
-              label="No efectivo"
-              value={money(view.sales.nonCash)}
-              foot="Tarjeta, transferencias y Uber Eats"
-            />
+            {/* Una tarjeta por medio de pago, en el mismo orden y con el mismo
+                color que la dona de abajo. Se recorre sales.methods en vez de
+                leer cash/card/transfer/uber sueltos para que tarjetas y grafica
+                no se puedan desincronizar. */}
+            {view.sales.methods.map((method) => (
+              <KpiTile
+                key={method.key}
+                label={method.shortLabel}
+                value={money(method.amount)}
+                swatch={method.color}
+                foot={
+                  view.sales.total > 0
+                    ? `${percent(method.share)} del total`
+                    : "Sin ventas en el periodo"
+                }
+              />
+            ))}
             <KpiTile
               label="Retirado"
               value={money(view.withdrawalsTotal)}
@@ -139,7 +147,7 @@ export default function ResumenPage() {
               {view.sales.total > 0 ? (
                 <div className="dash-donut-row">
                   <MethodDonut slices={view.sales.methods} total={view.sales.total} />
-                  <MethodLegend slices={view.sales.methods} compact />
+                  <MethodLegend slices={view.sales.methods} compact showAmounts={false} />
                 </div>
               ) : (
                 <EmptyState
