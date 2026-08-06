@@ -9,6 +9,19 @@ import {
 
 export const runtime = "nodejs";
 
+// El conteo fisico es la unica forma de saber si la caja cuadra. Si esta lista
+// cambia hay que cambiarla tambien en app/page.tsx.
+const denominationKeys = [
+  "q200",
+  "q100",
+  "q50",
+  "q20",
+  "q10",
+  "q5",
+  "q1",
+  "menores",
+] as const;
+
 function optionalAmount(value: unknown) {
   const numberValue = Number(value);
   return Number.isFinite(numberValue) ? Math.max(0, numberValue) : 0;
@@ -22,6 +35,25 @@ function hasAmount(value: unknown) {
 
 function text(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+/** Exige las ocho denominaciones: un cero explicito no es lo mismo que omitir. */
+function cleanDenominations(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { denominations: {}, missing: [...denominationKeys] };
+  }
+
+  const source = value as Record<string, unknown>;
+
+  return {
+    denominations: Object.fromEntries(
+      denominationKeys.map((key) => [
+        key,
+        hasAmount(source[key]) ? optionalAmount(source[key]) : 0,
+      ]),
+    ),
+    missing: denominationKeys.filter((key) => !hasAmount(source[key])),
+  };
 }
 
 export async function POST(request: Request) {
@@ -38,10 +70,20 @@ export async function POST(request: Request) {
       !hasAmount(body.cashSales) ||
       !hasAmount(body.cardSales) ||
       !hasAmount(body.transferSales) ||
-      !hasAmount(body.uberSales)
+      !hasAmount(body.uberSales) ||
+      !hasAmount(body.countedCash)
     ) {
       return NextResponse.json(
         { message: "Todos los campos del cierre son obligatorios." },
+        { status: 400 },
+      );
+    }
+
+    const { denominations, missing } = cleanDenominations(body.denominations);
+
+    if (missing.length > 0) {
+      return NextResponse.json(
+        { message: "Todas las denominaciones son obligatorias." },
         { status: 400 },
       );
     }
@@ -60,8 +102,8 @@ export async function POST(request: Request) {
       transferSales: optionalAmount(body.transferSales),
       uberSales: optionalAmount(body.uberSales),
       expectedCash,
-      countedCash: expectedCash,
-      denominations: {},
+      countedCash: optionalAmount(body.countedCash),
+      denominations,
       notes,
     };
 

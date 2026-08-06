@@ -7,7 +7,10 @@ import {
   buildActivity,
   buildAlerts,
   buildSales,
+  CASH_STATUS_LABELS,
   cancellationsInRange,
+  cashStatus,
+  closingDifference,
   closingsInRange,
   deltaLabel,
   formatTime,
@@ -34,7 +37,6 @@ import {
   MethodLegend,
   PeriodPicker,
   ScreenHeader,
-  Unavailable,
   shiftLabel,
 } from "./components";
 import { useDashboard } from "./dashboard-context";
@@ -77,6 +79,10 @@ export default function ResumenPage() {
       withdrawals,
       sales,
       previousTotal: previous.total,
+      difference: closings.reduce(
+        (total, closing) => total + closingDifference(closing),
+        0,
+      ),
       withdrawalsTotal: withdrawals.reduce((total, item) => total + item.amount, 0),
       activity: buildActivity(closings, withdrawals, cancellations),
       alerts: buildAlerts({
@@ -163,11 +169,21 @@ export default function ResumenPage() {
                 baseCash={snapshot.config.baseCash}
                 cashLimit={snapshot.config.cashLimit}
               />
-              <Unavailable title="Estado de caja: dato no disponible">
-                La app de cierre no registra hoy el efectivo contado físicamente, así
-                que no se puede calcular si la caja está cuadrada, sobra o falta
-                dinero. Requerimiento futuro.
-              </Unavailable>
+              <div className={`dash-status is-${cashStatus(view.difference)}`}>
+                {view.difference === 0 ? (
+                  <IconCheck size={18} />
+                ) : (
+                  <IconWarning size={18} />
+                )}
+                <span>
+                  <strong>{CASH_STATUS_LABELS[cashStatus(view.difference)]}</strong>
+                  <small>
+                    {view.difference === 0
+                      ? "Lo contado coincide con lo esperado en el periodo."
+                      : `Diferencia acumulada del periodo: ${money(view.difference)}.`}
+                  </small>
+                </span>
+              </div>
             </Card>
           </div>
 
